@@ -1,0 +1,42 @@
+name: Security Pipeline
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Run Terraform Security Scan
+        uses: aquasecurity/tfsec-action@v1.0.0
+        
+      - name: Run SAST Scan
+        uses: github/codeql-action/analyze@v1
+        with:
+          languages: typescript, powershell
+          
+      - name: Check for Secrets
+        uses: zricethezav/gitleaks-action@master
+        
+      - name: Compliance Check
+        run: |
+          ./scripts/compliance-check.sh
+          
+  deployment:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy Infrastructure
+        run: |
+          terraform init
+          terraform plan -out=tfplan
+          terraform apply tfplan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}

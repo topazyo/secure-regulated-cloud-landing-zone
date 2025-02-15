@@ -1,0 +1,87 @@
+name: Infrastructure Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 */6 * * *'  # Run every 6 hours
+
+jobs:
+  security-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run Security Tests
+        run: |
+          npm run security-tests
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+  compliance-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v1
+
+      - name: Terraform Init
+        run: terraform init
+        
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.0
+        
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: terraform
+
+  integration-tests:
+    needs: [security-validation, compliance-check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+          
+      - name: Run Integration Tests
+        run: |
+          npm install
+          npm run integration-tests
+        env:
+          TEST_SUBSCRIPTION_ID: ${{ secrets.TEST_SUBSCRIPTION_ID }}
+          TEST_RESOURCE_GROUP: ${{ secrets.TEST_RESOURCE_GROUP }}
+
+  deployment-validation:
+    needs: [integration-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Deployment
+        run: |
+          ./scripts/validate-deployment.sh
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}

@@ -1,0 +1,53 @@
+compliance_engine:
+  scan_interval: 300  # 5 minutes
+  retention_period: 730  # days
+  alert_threshold: 
+    critical: 0
+    high: 2
+    medium: 5
+
+regulatory_frameworks:
+  - name: "SWIFT-SCR"
+    version: "2023"
+    controls:
+      - id: "1.1"
+        description: "Restrict internet access"
+        validation:
+          type: "network_flow"
+          criteria:
+            - destination_type: "Internet"
+              action: "Deny"
+              exceptions:
+                - "approved_endpoints.json"
+
+  - name: "PCI-DSS"
+    version: "3.2.1"
+    controls:
+      - id: "3.4"
+        description: "Encrypt PAN"
+        validation:
+          type: "encryption_check"
+          criteria:
+            - algorithm: "AES-256"
+              key_source: "HSM"
+
+monitoring:
+  metrics:
+    - name: "policy_violations"
+      threshold: 0
+      window: "5m"
+      action: "alert"
+    
+    - name: "hsm_latency"
+      threshold: 100  # milliseconds
+      window: "1m"
+      action: "alert"
+
+remediation:
+  automatic:
+    enabled: true
+    max_attempts: 3
+    blackout_periods:
+      - start: "00:00"
+        end: "04:00"
+        timezone: "UTC"
