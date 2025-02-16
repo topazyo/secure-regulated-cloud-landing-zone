@@ -1,0 +1,269 @@
+### Security & Credentials ###
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+*.pwd
+.env
+.env.*
+!.env.example
+credentials.json
+*credential*
+*secret*
+*password*
+*apikey*
+.aws/
+.azure/
+.kube/
+
+### Infrastructure & Cloud ###
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl
+*.plan
+
+# Azure
+*.publishsettings
+azureauth.json
+azurecredentials.json
+
+# AWS
+aws-credentials.json
+.aws-sam/
+
+### IDE & Editors ###
+# VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+### Programming Languages ###
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn
+.pnp.*
+.node_repl_history
+*.tsbuildinfo
+.nest/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.python-version
+.env/
+.venv/
+venv/
+ENV/
+.pytest_cache/
+
+# Java
+*.class
+*.log
+*.ctxt
+.mtj.tmp/
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+.gradle/
+build/
+target/
+
+### Operating Systems ###
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+### Build & Dependencies ###
+# Compiled files
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Dependency directories
+jspm_packages/
+bower_components/
+
+# Distribution directories
+dist/
+build/
+out/
+
+### Testing & Coverage ###
+# Coverage reports
+coverage/
+.coverage
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+htmlcov/
+.tox/
+.coverage.*
+.cache
+nosetests.xml
+junit*.xml
+
+### Documentation ###
+# Generated documentation
+docs/_build/
+site/
+.docusaurus
+
+### Logs & Debugging ###
+# Log files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Debug files
+.debug/
+debug.log
+.nyc_output/
+
+### Temporary Files ###
+# Temporary directories
+temp/
+tmp/
+.temp/
+.tmp/
+
+# Backup files
+*.bak
+*.backup
+*~
+*.swp
+
+### Project Specific ###
+# Add project-specific ignores here
+secrets/
+private/
+confidential/
+restricted/
+
+### Miscellaneous ###
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+
+# Local configuration
+config.local.js
+settings.local.json
+local.properties
+
+# Personal scripts
+personal/
+scripts/personal/
