@@ -1,0 +1,45 @@
+pci_dss:
+  version: "3.2.1"
+  requirements:
+    - id: "1.1"
+      description: "Network Security Configuration"
+      controls:
+        - name: "firewall-configuration"
+          validation:
+            type: "resource-config"
+            resource: "azurerm_firewall"
+            required_rules:
+              - name: "default-deny"
+                priority: 4096
+                action: "Deny"
+                
+        - name: "network-segmentation"
+          validation:
+            type: "network-flow"
+            requirements:
+              - source: "Internet"
+                destination: "CardData"
+                expected: "Denied"
+
+    - id: "3.4"
+      description: "Encryption Requirements"
+      controls:
+        - name: "key-encryption"
+          validation:
+            type: "key-vault"
+            requirements:
+              - key_type: "RSA-HSM"
+                key_size: 4096
+                rotation_days: 90
+
+    - id: "10.2"
+      description: "Audit Logging"
+      controls:
+        - name: "log-retention"
+          validation:
+            type: "log-analytics"
+            retention_days: 365
+            required_events:
+              - category: "SecurityAlert"
+              - category: "AzureActivity"
+              - category: "AuditEvent"

@@ -1,0 +1,43 @@
+alert_rules:
+  security_violations:
+    critical:
+      threshold: 0
+      window_size: "PT5M"
+      evaluation_frequency: "PT1M"
+      action_groups:
+        - name: "security-team"
+          notifications:
+            - type: "email"
+              recipients: ["security@company.com"]
+            - type: "sms"
+              recipients: ["+1234567890"]
+        - name: "incident-response"
+          webhook: "https://incident.company.com/api/v1/alerts"
+
+    high:
+      threshold: 2
+      window_size: "PT15M"
+      evaluation_frequency: "PT5M"
+      action_groups:
+        - name: "security-team"
+          notifications:
+            - type: "email"
+              recipients: ["security@company.com"]
+
+log_analytics:
+  workspace:
+    sku: "PerGB2018"
+    retention_days: 365
+    daily_quota_gb: 100
+  
+  queries:
+    security_events:
+      - name: "privileged-access"
+        query: |
+          SecurityEvent
+          | where EventID in (4624, 4625)
+          | where Account contains "admin"
+      - name: "network-violations"
+        query: |
+          AzureNetworkAnalytics_CL
+          | where FlowType_s == "MaliciousFlow"

@@ -1,0 +1,34 @@
+log_analytics:
+  workspaces:
+    security:
+      name: "security-monitoring"
+      sku: "PerGB2018"
+      retention_days: 365
+      daily_quota_gb: 100
+      solutions:
+        - name: "SecurityInsights"
+        - name: "NetworkMonitoring"
+        - name: "KeyVaultAnalytics"
+
+  queries:
+    security_events:
+      privileged_access:
+        query: |
+          SecurityEvent
+          | where EventID in (4624, 4625, 4648)
+          | where Account contains "admin"
+          | where TimeGenerated > ago(1h)
+          | project TimeGenerated, Account, IpAddress, EventID
+        alert:
+          frequency: "PT5M"
+          severity: "High"
+          
+      network_violations:
+        query: |
+          AzureNetworkAnalytics_CL
+          | where FlowType_s == "MaliciousFlow"
+          | where TimeGenerated > ago(15m)
+          | project TimeGenerated, SourceIP_s, DestinationIP_s, FlowType_s
+        alert:
+          frequency: "PT15M"
+          severity: "Critical"
