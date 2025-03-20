@@ -14,11 +14,14 @@ jobs:
       - name: Run Terraform Security Scan
         uses: aquasecurity/tfsec-action@v1.0.0
         
-      - name: Run SAST Scan
-        uses: github/codeql-action/analyze@v1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v1
         with:
-          languages: typescript, powershell
-          
+          languages: typescript, javascript
+      
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v1
+        
       - name: Check for Secrets
         uses: zricethezav/gitleaks-action@master
         

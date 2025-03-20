@@ -1,0 +1,135 @@
+{
+    "name": "secure-regulated-cloud-landing-zone",
+    "version": "1.0.0",
+    "description": "Enterprise-grade landing zone implementation for regulated industries with zero trust architecture, HSM-backed security, and real-time compliance monitoring",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "engines": {
+      "node": ">=16.0.0"
+    },
+    "scripts": {
+      "build": "tsc",
+      "clean": "rimraf dist",
+      "lint": "eslint 'src/**/*.ts'",
+      "lint:fix": "eslint 'src/**/*.ts' --fix",
+      "test": "mocha -r ts-node/register 'tests/**/*.ts'",
+      "test:unit": "mocha -r ts-node/register 'tests/unit/**/*.ts'",
+      "test:integration": "mocha -r ts-node/register 'tests/integration/**/*.ts'",
+      "test:security": "mocha -r ts-node/register 'tests/security/**/*.ts'",
+      "test:compliance": "mocha -r ts-node/register 'tests/compliance/**/*.ts'",
+      "test:coverage": "nyc npm run test",
+      "validate:terraform": "cd src/terraform && terraform validate",
+      "security-scan": "npm run security-scan:code && npm run security-scan:deps && npm run security-scan:terraform",
+      "security-scan:code": "eslint --plugin security 'src/**/*.ts'",
+      "security-scan:deps": "npm audit --audit-level=high",
+      "security-scan:terraform": "cd src/terraform && tfsec .",
+      "docs:generate": "typedoc --out docs/api src",
+      "prepare": "husky install",
+      "deploy:dev": "ts-node src/scripts/deploy.ts --env=dev",
+      "deploy:test": "ts-node src/scripts/deploy.ts --env=test",
+      "deploy:prod": "ts-node src/scripts/deploy.ts --env=prod",
+      "monitor:compliance": "ts-node src/scripts/monitor-compliance.ts",
+      "monitor:security": "ts-node src/scripts/monitor-security.ts",
+      "validate:compliance": "ts-node src/scripts/validate-compliance.ts",
+      "rotate:keys": "ts-node src/scripts/rotate-keys.ts"
+    },
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/your-org/secure-regulated-cloud-landing-zone.git"
+    },
+    "keywords": [
+      "azure",
+      "security",
+      "compliance",
+      "landing-zone",
+      "zero-trust",
+      "regulated-industries",
+      "financial-services",
+      "pci-dss",
+      "swift",
+      "hsm",
+      "terraform"
+    ],
+    "author": "Your Organization",
+    "license": "Apache-2.0",
+    "bugs": {
+      "url": "https://github.com/your-org/secure-regulated-cloud-landing-zone/issues"
+    },
+    "homepage": "https://github.com/your-org/secure-regulated-cloud-landing-zone#readme",
+    "dependencies": {
+      "@azure/arm-automation": "^11.0.0",
+      "@azure/arm-keyvault": "^2.0.0",
+      "@azure/arm-loganalytics": "^7.0.0",
+      "@azure/arm-monitor": "^7.0.0",
+      "@azure/arm-network": "^26.0.0",
+      "@azure/arm-policy": "^5.0.0",
+      "@azure/arm-resources": "^5.0.0",
+      "@azure/arm-security": "^5.0.0",
+      "@azure/arm-securityinsight": "^1.0.0",
+      "@azure/event-hubs": "^5.8.0",
+      "@azure/eventgrid": "^4.11.0",
+      "@azure/identity": "^3.1.3",
+      "@azure/keyvault-certificates": "^4.6.0",
+      "@azure/keyvault-keys": "^4.6.0",
+      "@azure/keyvault-secrets": "^4.6.0",
+      "@azure/storage-blob": "^12.13.0",
+      "@azure/ai-anomaly-detector": "^3.0.0",
+      "axios": "^1.3.4",
+      "commander": "^10.0.0",
+      "dotenv": "^16.0.3",
+      "js-yaml": "^4.1.0",
+      "winston": "^3.8.2"
+    },
+    "devDependencies": {
+      "@types/chai": "^4.3.4",
+      "@types/chai-as-promised": "^7.1.5",
+      "@types/js-yaml": "^4.0.5",
+      "@types/mocha": "^10.0.1",
+      "@types/node": "^18.14.6",
+      "@types/sinon": "^10.0.13",
+      "@typescript-eslint/eslint-plugin": "^5.54.1",
+      "@typescript-eslint/parser": "^5.54.1",
+      "chai": "^4.3.7",
+      "chai-as-promised": "^7.1.1",
+      "eslint": "^8.35.0",
+      "eslint-config-prettier": "^8.7.0",
+      "eslint-plugin-prettier": "^4.2.1",
+      "eslint-plugin-security": "^1.7.1",
+      "husky": "^8.0.3",
+      "lint-staged": "^13.1.2",
+      "mocha": "^10.2.0",
+      "nyc": "^15.1.0",
+      "prettier": "^2.8.4",
+      "rimraf": "^4.3.0",
+      "sinon": "^15.0.1",
+      "ts-node": "^10.9.1",
+      "typedoc": "^0.23.26",
+      "typescript": "^4.9.5"
+    },
+    "lint-staged": {
+      "*.ts": [
+        "eslint --fix",
+        "prettier --write"
+      ],
+      "*.{json,md,yaml,yml}": [
+        "prettier --write"
+      ]
+    },
+    "nyc": {
+      "extension": [
+        ".ts"
+      ],
+      "exclude": [
+        "**/*.d.ts",
+        "coverage",
+        "dist",
+        "tests"
+      ],
+      "reporter": [
+        "html",
+        "text",
+        "lcov"
+      ],
+      "all": true
+    }
+  }
