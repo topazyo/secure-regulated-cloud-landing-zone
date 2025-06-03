@@ -1105,6 +1105,7 @@ execute_control_check() {
     local expected_config_json=$(echo "$control_json" | jq '.expectedConfiguration') # Keep as JSON object
     local rule_criteria_json=$(echo "$control_json" | jq '.ruleCriteria') # For checks like NET_NSG_NO_ANY_ALLOW
     local expected_result_value=$(echo "$control_json" | jq -r '.expectedResult') # For checks where we expect non-existence
+    local remediation_suggestion=$(echo "$control_json" | jq -r '.remediationSuggestion // ""')
 
     echo -e "${BLUE}[INFO]${NC} Executing Check ID: $control_id - Type: $control_type"
     echo -e "${BLUE}[INFO]${NC} Description: $control_desc"
@@ -1393,6 +1394,12 @@ execute_control_check() {
         # This case should ideally not be hit if check functions always return valid JSON
         check_result_json="{\"status\": \"FrameworkError\", \"message\": \"Malformed or empty JSON response from check function for $control_id. Output: $check_result_json\"}"
     fi
+
+    # If the check resulted in Non-Compliant and there's a remediation suggestion, add it to the result
+    local current_status=$(echo "$check_result_json" | jq -r '.status')
+    if [ "$current_status" == "Non-Compliant" ] && [ -n "$remediation_suggestion" ]; then
+        check_result_json=$(echo "$check_result_json" | jq --arg suggestion "$remediation_suggestion" '. + {suggestion: $suggestion}')
+    fi
     
     echo "$check_result_json" | jq --arg id "$control_id" --arg desc "$control_desc" --arg cat "$(echo "$control_json" | jq -r '.category')" \
     '. | .controlId = $id | .description = $desc | .category = $cat'
@@ -1437,7 +1444,7 @@ EOF
     echo -e "Overall Status: $(if [ "$overall_status" == "Compliant" ]; then echo -e "${GREEN}$overall_status${NC}"; else echo -e "${RED}$overall_status${NC}"; fi)"
 
     # Summarize by category if desired, or list non-compliant controls
-    echo "$control_results_json_array" | jq -r '.[] | select(.status != "Compliant" and .status != "Skipped") | "[\(.status)] \(.controlId) - \(.description): \(.message)"' | while read -r line; do
+    echo "$control_results_json_array" | jq -r '.[] | select(.status != "Compliant" and .status != "Skipped") | "[\(.status)] \(.controlId) - \(.description): \(.message) " + (if .suggestion then "(Suggestion: \(.suggestion))" else "" end)' | while read -r line; do
         if [[ "$line" == *"[Non-Compliant]"* ]]; then
             echo -e "${RED}$line${NC}"
         elif [[ "$line" == *"[Error]"* ]]; then

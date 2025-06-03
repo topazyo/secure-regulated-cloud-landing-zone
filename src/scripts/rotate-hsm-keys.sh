@@ -1,35 +1,17 @@
 #!/bin/bash
 
-# Purpose: Creates a new version of a specified HSM-backed key in Azure Key Vault.
-# This effectively "rotates" the key by making a new version the current one.
-#
-# Usage: ./rotate-hsm-keys.sh <key_vault_name> <key_name>
-#
-# Parameters:
-#   <key_vault_name>: The name of the Azure Key Vault.
-#   <key_name>: The name of the HSM-backed key to rotate.
-#
-# Prerequisites:
-#   - Azure CLI installed and configured (run `az login`).
-#   - Permissions to create new key versions in the specified Key Vault.
-#
-# Example:
-#   ./rotate-hsm-keys.sh "myKeyVault" "myHsmKeyForRotation"
-#
+# Script to rotate HSM keys in Azure Key Vault
 
-# Function to log messages with a timestamp
+# Function to log messages
 log_message() {
-  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
 }
 
-# --- Script Start ---
-
-# Check for correct number of arguments
+# Check for required arguments
 if [ "$#" -ne 2 ]; then
-  echo "Usage: $0 <key_vault_name> <key_name>"
-  echo "Error: Incorrect number of arguments provided."
-  log_message "ERROR: Incorrect number of arguments. Usage: $0 <key_vault_name> <key_name>"
-  exit 1
+    log_message "ERROR: Incorrect number of arguments."
+    echo "Usage: $0 <key_vault_name> <key_name>"
+    exit 1
 fi
 
 KEY_VAULT_NAME=$1
@@ -37,38 +19,31 @@ KEY_NAME=$2
 
 log_message "Starting key rotation for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME'."
 
-# Create new key version using Azure CLI
-# --protection hsm: Ensures the new key version is HSM-backed.
-# --disabled false: Ensures the new key version is enabled upon creation.
-log_message "Executing: az keyvault key create --vault-name \"$KEY_VAULT_NAME\" --name \"$KEY_NAME\" --protection hsm --disabled false"
-az keyvault key create --vault-name "$KEY_VAULT_NAME" --name "$KEY_NAME" --protection hsm --disabled false
-AZ_EXIT_CODE=$?
+# Create a new version of the key
+log_message "Attempting to create a new version for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME' (type: HSM)."
+AZ_CREATE_OUTPUT=$(az keyvault key create --vault-name "$KEY_VAULT_NAME" --name "$KEY_NAME" --protection hsm 2>&1)
 
-if [ $AZ_EXIT_CODE -eq 0 ]; then
-  log_message "Successfully created new version for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME'."
-
-  # Retrieve and log the new key version ID (the part after the last '/')
-  # Example KID: https://mykeyvault.vault.azure.net/keys/myHsmKeyForRotation/abcdef1234567890abcdef1234567890
-  # We want to extract "abcdef1234567890abcdef1234567890"
-  NEW_KEY_INFO_JSON=$(az keyvault key show --vault-name "$KEY_VAULT_NAME" --name "$KEY_NAME" -o json 2>/dev/null)
-  if [ $? -eq 0 ] && [ -n "$NEW_KEY_INFO_JSON" ]; then
-    NEW_KEY_ID=$(echo "$NEW_KEY_INFO_JSON" | jq -r '.key.kid')
-    NEW_KEY_VERSION=$(echo "$NEW_KEY_ID" | awk -F'/' '{print $NF}')
-    if [ -n "$NEW_KEY_VERSION" ]; then
-        log_message "New key version ID is: $NEW_KEY_VERSION (Full KID: $NEW_KEY_ID)"
-    else
-        log_message "Could not determine new key version ID from KID: $NEW_KEY_ID"
-    fi
-  else
-    log_message "WARNING: Could not retrieve new key version details after creation."
-  fi
-else
-  log_message "ERROR: Failed to create new version for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME'. Azure CLI exit code: $AZ_EXIT_CODE"
-  # Attempt to get more detailed error from Azure CLI if possible (stderr might have been captured by AZ_EXIT_CODE context)
-  # For robust error handling, one might redirect stderr of the failing command to a temp file to log it.
-  exit $AZ_EXIT_CODE
+# Check if the Azure CLI command was successful
+if [ $? -ne 0 ]; then
+    log_message "ERROR: Azure CLI command failed to create new key version."
+    log_message "Azure CLI output: $AZ_CREATE_OUTPUT"
+    exit 1
 fi
 
-log_message "Key rotation script finished for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME'."
+NEW_KEY_VERSION=$(echo "$AZ_CREATE_OUTPUT" | grep -oP '"kid":\s*"\K[^"]+/([0-9a-f]+)')
+if [ -z "$NEW_KEY_VERSION" ]; then
+    # Fallback if grep -oP is not available or pattern fails
+    NEW_KEY_VERSION=$(echo "$AZ_CREATE_OUTPUT" | awk -F'"' '/kid/{print $4}' | awk -F'/' '{print $NF}')
+fi
+
+
+if [ -n "$NEW_KEY_VERSION" ]; then
+    log_message "Successfully created new version for key '$KEY_NAME'. New version ID fragment: $NEW_KEY_VERSION"
+else
+    log_message "Successfully initiated creation of new version for key '$KEY_NAME'. Could not parse new version ID from output."
+    log_message "Full output: $AZ_CREATE_OUTPUT" # Log full output if parsing fails
+fi
+
+log_message "Key rotation process completed for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME'."
 
 exit 0

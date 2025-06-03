@@ -226,6 +226,213 @@ function get_subnet_requirements {
     echo "" # No match found
 }
 
+# Helper function to normalize a single protocol:port entry
+# Input: "Tcp:80", "Udp:500-600", "Any:123", "*:123", "123" (implies Any:123), "Tcp:*"
+# Output: "protocol:start_port:end_port" e.g., "Tcp:80:80", "Udp:500:600", "Any:123:123", "Tcp:0:65535"
+_normalize_protocol_port_entry() {
+    local entry="$1"
+    local proto="Any" # Default protocol
+    local port_def=""
+
+    if [[ "$entry" == *":"* ]]; then
+        proto=$(echo "$entry" | cut -d':' -f1)
+        port_def=$(echo "$entry" | cut -d':' -f2)
+    else
+        port_def="$entry" # Entry is just a port or port range or *
+    fi
+
+    if [[ "$proto" == "*" ]]; then proto="Any"; fi # Normalize protocol wildcard
+
+    local start_port
+    local end_port
+
+    if [[ "$port_def" == "*" ]] || [[ -z "$port_def" ]]; then
+        start_port="0"
+        end_port="65535"
+    elif [[ "$port_def" == *-* ]]; then
+        start_port=$(echo "$port_def" | cut -d'-' -f1)
+        end_port=$(echo "$port_def" | cut -d'-' -f2)
+        # Basic validation for range values
+        if ! [[ "$start_port" =~ ^[0-9]+$ && "$end_port" =~ ^[0-9]+$ && $start_port -le $end_port ]]; then
+            log "WARNING" "Invalid port range in _normalize_protocol_port_entry: $port_def. Defaulting to 0-65535 for this part."
+            start_port="0"; end_port="65535"
+        fi
+    else
+        # Basic validation for single port value
+        if ! [[ "$port_def" =~ ^[0-9]+$ ]]; then
+             log "WARNING" "Invalid port value in _normalize_protocol_port_entry: $port_def. Defaulting to 0-65535 for this part."
+             start_port="0"; end_port="65535"
+        else
+            start_port="$port_def"
+            end_port="$port_def"
+        fi
+    fi
+
+    # Ensure protocol is not empty if it was parsed as such (e.g. from ":80")
+    if [[ -z "$proto" ]]; then proto="Any"; fi
+
+    echo "${proto}:${start_port}:${end_port}"
+}
+
+# Helper function to parse an array of protocol/port definitions (from network_requirements.json)
+# Input: JSON array string like '["Tcp:80", "Udp:500-600", "3000"]'
+# Output: Space-separated string of normalized entries "Tcp:80:80 Udp:500:600 Any:3000:3000"
+_parse_protocol_port_definitions() {
+    local json_array_str="$1"
+    local normalized_defs=""
+
+    echo "$json_array_str" | jq -r '.[]?' | while IFS= read -r entry; do
+        if [[ -n "$entry" ]]; then
+            normalized_defs+="$(_normalize_protocol_port_entry "$entry") "
+        fi
+    done
+    echo "$normalized_defs" | sed 's/ $//' # Remove trailing space
+}
+
+# Helper function to parse protocols and ports from an NSG rule JSON object
+# Input: NSG rule JSON object string
+# Output: Space-separated string of normalized entries "Protocol:StartPort:EndPort"
+_parse_nsg_rule_protocols_ports() {
+    local rule_json_str="$1"
+    local normalized_rule_ports=""
+
+    local protocol=$(echo "$rule_json_str" | jq -r '.protocol') # This is "Tcp", "Udp", "Icmp", "*" etc.
+    local dest_port_range_single=$(echo "$rule_json_str" | jq -r '.destinationPortRange // ""')
+    local dest_port_ranges_array=$(echo "$rule_json_str" | jq -c '.destinationPortRanges // []')
+
+    # If destinationPortRanges has entries, it's preferred.
+    if [[ $(echo "$dest_port_ranges_array" | jq '. | length') -gt 0 ]]; then
+        echo "$dest_port_ranges_array" | jq -r '.[]?' | while IFS= read -r port_range_item; do
+            if [[ -n "$port_range_item" ]]; then # port_range_item is "80", "100-200", etc.
+                normalized_rule_ports+="$(_normalize_protocol_port_entry "${protocol}:${port_range_item}") "
+            fi
+        done
+    # Else, use destinationPortRange (single value or "*")
+    elif [[ -n "$dest_port_range_single" ]]; then
+         normalized_rule_ports+="$(_normalize_protocol_port_entry "${protocol}:${dest_port_range_single}") "
+    # If neither is present (should be rare for rules allowing traffic), treat as all ports for the protocol
+    else
+        normalized_rule_ports+="$(_normalize_protocol_port_entry "${protocol}:*") "
+    fi
+
+    echo "$normalized_rule_ports" | sed 's/ $//' # Remove trailing space
+}
+
+# Helper function to check for overlap between a required/prohibited entry and an actual rule entry
+# Inputs: req_norm_entry ("Proto:Start:End"), rule_norm_entry ("Proto:Start:End")
+# Output: "true" if overlap, "false" otherwise
+_check_protocol_port_overlap() {
+    local req_entry="$1"
+    local rule_entry="$2"
+
+    IFS=':' read -r req_proto req_start_port req_end_port <<< "$req_entry"
+    IFS=':' read -r rule_proto rule_start_port rule_end_port <<< "$rule_entry"
+
+    local proto_match=false
+    # Using Azure's convention for wildcard protocol: "*"
+    if [[ "$req_proto" == "Any" ]] || [[ "$rule_proto" == "*" ]] || \
+       [[ "$req_proto" == "$rule_proto" ]]; then
+        # Case-insensitive protocol match:
+        # local req_proto_lower=$(echo "$req_proto" | tr '[:upper:]' '[:lower:]')
+        # local rule_proto_lower=$(echo "$rule_proto" | tr '[:upper:]' '[:lower:]')
+        # if [[ "$req_proto_lower" == "any" ]] || [[ "$rule_proto_lower" == "*" ]] || [[ "$rule_proto_lower" == "any" ]] || \
+        #    [[ "$req_proto_lower" == "$rule_proto_lower" ]]; then
+        proto_match=true
+        # fi
+    fi
+
+    if ! $proto_match; then
+        echo "false"
+        return
+    fi
+
+    # Port overlap check: max(start1, start2) <= min(end1, end2)
+    # Ensure values are treated as integers for comparison
+    req_start_port=${req_start_port:-0}
+    req_end_port=${req_end_port:-0}
+    rule_start_port=${rule_start_port:-0}
+    rule_end_port=${rule_end_port:-0}
+
+    local max_start=$(( req_start_port > rule_start_port ? req_start_port : rule_start_port ))
+    local min_end=$(( req_end_port < rule_end_port ? req_end_port : rule_end_port ))
+
+    if (( max_start <= min_end )); then
+        echo "true"
+    else
+        echo "false"
+    fi
+}
+
+# Helper function to check address prefix overlap (simplified for Bash)
+# Input1: JSON array string of required prefixes/tags (e.g., '["10.0.0.0/16", "VirtualNetwork"]')
+# Input2: Single address prefix/tag from NSG rule (e.g., "10.0.1.0/24", "Internet")
+# Input3: JSON array string of address prefixes/tags from NSG rule e.g. '["10.0.1.0/24", "AzureLoadBalancer"]'
+# Output: "true" if a match/overlap is found, "false" otherwise
+_check_address_overlap() {
+    local required_prefixes_json_array_str="$1"
+    local rule_single_prefix_str="$2"
+    local rule_prefixes_json_array_str="$3"
+    local match_found="false"
+
+    # Normalize "Any" to "*" for comparison with Azure's typical wildcard representation
+    if [[ "$rule_single_prefix_str" == "Any" ]]; then rule_single_prefix_str="*"; fi
+    # TODO: Could normalize items within rule_prefixes_json_array_str as well if "Any" is used there.
+
+    # Create a combined list of actual rule prefixes to check
+    local rule_prefixes_to_check=()
+    if [[ -n "$rule_single_prefix_str" && "$rule_single_prefix_str" != "null" ]]; then
+        rule_prefixes_to_check+=("$rule_single_prefix_str")
+    fi
+    if [[ -n "$rule_prefixes_json_array_str" ]] && [[ "$rule_prefixes_json_array_str" != "[]" ]]; then
+        echo "$rule_prefixes_json_array_str" | jq -r '.[]?' | while IFS= read -r item; do
+             if [[ "$item" == "Any" ]]; then item="*"; fi # Normalize
+             rule_prefixes_to_check+=("$item")
+        done
+    fi
+
+    # If the rule has no specific prefixes (e.g. implicit any from old rule formats), treat as "*"
+    if [[ ${#rule_prefixes_to_check[@]} -eq 0 ]]; then
+        rule_prefixes_to_check+=("*")
+    fi
+
+    echo "$required_prefixes_json_array_str" | jq -r '.[]?' | while IFS= read -r req_prefix; do
+        if [[ -z "$req_prefix" ]]; then continue; fi
+        local normalized_req_prefix="$req_prefix"
+        if [[ "$req_prefix" == "Any" ]]; then normalized_req_prefix="*"; fi
+
+        for rule_prefix in "${rule_prefixes_to_check[@]}"; do
+            # Case 1: Exact match
+            if [[ "$normalized_req_prefix" == "$rule_prefix" ]]; then
+                match_found="true"; break
+            fi
+            # Case 2: Required prefix is a wildcard that covers any rule_prefix
+            if [[ "$normalized_req_prefix" == "*" ]] || [[ "$normalized_req_prefix" == "Internet" && "$rule_prefix" != "VirtualNetwork" && "$rule_prefix" != "AzureLoadBalancer" ]]; then # "Internet" req covers specific IPs unless rule is more restrictive like VNet only
+                 match_found="true"; break
+            fi
+            # Case 3: Rule prefix is a wildcard that covers the required prefix
+            if [[ "$rule_prefix" == "*" ]] || [[ "$rule_prefix" == "Internet" && "$normalized_req_prefix" != "VirtualNetwork" && "$normalized_req_prefix" != "AzureLoadBalancer" ]]; then
+                 match_found="true"; break
+            fi
+            # Case 4: Specific tags that imply broader coverage
+            if [[ "$normalized_req_prefix" == "VirtualNetwork" && "$rule_prefix" == "*" ]]; then # Rule allows Any, covers VNet
+                 match_found="true"; break
+            fi
+             if [[ "$normalized_req_prefix" == "AzureLoadBalancer" && "$rule_prefix" == "*" ]]; then # Rule allows Any, covers LB
+                 match_found="true"; break
+            fi
+            # Add more sophisticated CIDR logic here if possible in Bash, though it's hard.
+            # For now, exact match or wildcards are the primary logic.
+            # Example (very basic CIDR subset check - not robust):
+            # if [[ $rule_prefix == ${normalized_req_prefix}* ]]; then # Rule is more specific than or equal to required.
+            #    match_found="true"; break
+            # fi
+        done
+        if [[ "$match_found" == "true" ]]; then break; fi
+    done < <(echo "$required_prefixes_json_array_str" | jq -r '.[]?') # Ensure while loop runs in current shell context
+
+    echo "$match_found"
+}
+
 
 # Function to record compliance check result
 function record_result {
@@ -265,151 +472,262 @@ EOF
     esac
 }
 
-# Function to check network segmentation
 function check_network_segmentation {
     log "INFO" "Checking network segmentation..."
-    
-    # Get all virtual networks
-    local vnets=$(az network vnet list --query "[].{name:name, resourceGroup:resourceGroup}" -o json)
-    
-    # Check if each subnet has an NSG attached & validate NSG rules based on network_requirements.json
-    for vnet_row in $(echo "$vnets" | jq -c '.[]'); do
-        local vnet_name=$(echo "$vnet_row" | jq -r '.name')
-        local vnet_rg=$(echo "$vnet_row" | jq -r '.resourceGroup')
+
+    # Helper function to process a single subnet (either from config or dynamic discovery)
+    # Parameters: $1: vnet_name, $2: vnet_rg (can be empty if using full ID from config), $3: subnet_name, $4: subnet_id (can be empty), $5: nsg_id_from_config (can be empty)
+    _process_subnet_for_segmentation_check() {
+        local vnet_name="$1"
+        local vnet_rg="$2" # May not be needed if nsg_id_from_config is a full ID
+        local subnet_name="$3"
+        # local subnet_id="$4" # Currently unused in this refactor, but kept for potential future use
+        local nsg_id_from_config="$5"
         
-        log "INFO" "Checking VNet: $vnet_name in resource group: $vnet_rg"
-        
-        local subnets_json=$(az network vnet subnet list --vnet-name "$vnet_name" --resource-group "$vnet_rg" -o json)
-        
-        for subnet_row in $(echo "$subnets_json" | jq -c '.[]'); do
-            local subnet_name=$(echo "$subnet_row" | jq -r '.name')
-            local subnet_id=$(echo "$subnet_row" | jq -r '.id')
-            local nsg_id=$(echo "$subnet_row" | jq -r '.networkSecurityGroup.id // empty')
-            local nsg_name=$(echo "$nsg_id" | awk -F'/' '{print $NF}') # Extract NSG name from ID
+        local nsg_id_to_check="$nsg_id_from_config"
+        local nsg_name
+        local nsg_rg
 
-            if [[ -z "$nsg_id" ]]; then
-                record_result "Network" "NSG-Attached-$vnet_name-$subnet_name" "FAILED" "Subnet $subnet_name in VNet $vnet_name does not have an NSG attached" "Attach an NSG to the subnet."
-                # Remediation logic (if enabled) would go here
-            else
-                record_result "Network" "NSG-Attached-$vnet_name-$subnet_name" "PASSED" "Subnet $subnet_name in VNet $vnet_name has an NSG attached: $nsg_name" ""
+        if [[ -z "$nsg_id_to_check" ]]; then
+            # If NSG ID not from config (dynamic discovery path), try to get it using subnet details
+            # This part is more relevant for the fallback dynamic mode
+            local subnet_details_json=$(az network vnet subnet show --vnet-name "$vnet_name" --resource-group "$vnet_rg" --name "$subnet_name" --query "{nsgId:networkSecurityGroup.id}" -o json 2>/dev/null)
+            nsg_id_to_check=$(echo "$subnet_details_json" | jq -r '.nsgId // empty')
+        fi
 
-                # Enhanced check using network_requirements.json
-                if [[ -n "$NETWORK_REQUIREMENTS_JSON" ]]; then
-                    local subnet_req_json=$(get_subnet_requirements "$subnet_name" "$NETWORK_REQUIREMENTS_JSON")
+        if [[ -n "$nsg_id_to_check" ]]; then
+            nsg_name=$(echo "$nsg_id_to_check" | awk -F'/' '{print $NF}')
+            # Attempt to extract RG from NSG ID, assuming standard ID format
+            # /subscriptions/<sub_id>/resourceGroups/<rg_name>/providers/Microsoft.Network/networkSecurityGroups/<nsg_name>
+            nsg_rg=$(echo "$nsg_id_to_check" | awk -F'/' '{if (NF>=9 && $(NF-4)=="resourceGroups") print $(NF-3); else print ""}')
+            if [[ -z "$nsg_rg" && -n "$vnet_rg" ]]; then # Fallback to VNet's RG if NSG's RG not in ID or parsing failed
+                log "WARNING" "Could not determine NSG resource group from ID '$nsg_id_to_check' for NSG '$nsg_name'. Assuming VNet's resource group '$vnet_rg'."
+                nsg_rg="$vnet_rg"
+            elif [[ -z "$nsg_rg" && -z "$vnet_rg" ]]; then # If VNet RG also not available (e.g. pure config mode with bad NSG ID)
+                 log "ERROR" "Cannot determine resource group for NSG '$nsg_name' (ID: $nsg_id_to_check). Skipping rule validation for this NSG."
+                 record_result "Network" "NSG-RuleValidation-$vnet_name-$subnet_name" "FAILED" "Cannot determine RG for NSG '$nsg_name' attached to subnet $subnet_name in VNet $vnet_name." "Ensure NSG ID in config is complete or NSG is in VNet's RG if VNet RG is also from config."
+                 return
+            fi
+        fi
 
-                    if [[ -n "$subnet_req_json" ]]; then
-                        log "INFO" "Applying specific requirements for subnet pattern matching '$subnet_name' using NSG '$nsg_name'."
-                        local prohibited_sources_jq=$(echo "$subnet_req_json" | jq -c '.prohibitedInboundSources // []')
+        if [[ -z "$nsg_id_to_check" ]]; then
+            record_result "Network" "NSG-Attached-$vnet_name-$subnet_name" "FAILED" "Subnet $subnet_name in VNet $vnet_name does not have an NSG attached (or specified in config)" "Attach an NSG to the subnet or define in network_config.json."
+        else
+            record_result "Network" "NSG-Attached-$vnet_name-$subnet_name" "PASSED" "Subnet $subnet_name in VNet $vnet_name has an NSG attached/specified: $nsg_name" ""
 
-                        if [[ $(echo "$prohibited_sources_jq" | jq '. | length') -gt 0 ]]; then
-                            local nsg_rules_json=$(az network nsg rule list --nsg-name "$nsg_name" --resource-group "$vnet_rg" -o json) # Assuming NSG is in same RG as VNet for simplicity here
+            if [[ -n "$NETWORK_REQUIREMENTS_JSON" ]] && [[ -n "$nsg_name" ]] && [[ -n "$nsg_rg" ]]; then
+                local subnet_req_json=$(get_subnet_requirements "$subnet_name") # NETWORK_REQUIREMENTS_JSON is global
 
-                            echo "$nsg_rules_json" | jq -c '.[] | select(.direction == "Inbound")' | while IFS= read -r rule_json; do
-                                local rule_name=$(echo "$rule_json" | jq -r '.name')
-                                local source_prefix=$(echo "$rule_json" | jq -r '.sourceAddressPrefix // "Any"')
-                                local source_prefixes_array=$(echo "$rule_json" | jq -c '.sourceAddressPrefixes // []')
+                if [[ -n "$subnet_req_json" ]]; then
+                    log "INFO" "Applying specific requirements from network_requirements.json for subnet pattern matching '$subnet_name' using NSG '$nsg_name' (RG: '$nsg_rg')."
+                    local nsg_rules_json=$(az network nsg rule list --nsg-name "$nsg_name" --resource-group "$nsg_rg" -o json 2>/dev/null)
+                    if [ $? -ne 0 ] || [[ -z "$nsg_rules_json" ]]; then
+                        log "ERROR" "Failed to fetch rules for NSG '$nsg_name' in RG '$nsg_rg'."
+                        record_result "Network" "NSG-RuleFetch-$nsg_name" "FAILED" "Could not fetch rules for NSG '$nsg_name'." "Check NSG existence and permissions."
+                        return
+                    fi
 
-                                # Check single sourceAddressPrefix
-                                if echo "$prohibited_sources_jq" | jq -e --arg sp "$source_prefix" '.[] | select(. == $sp)' > /dev/null; then
-                                     record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedSource" "FAILED" "NSG rule '$rule_name' allows prohibited source '$source_prefix' for subnet '$subnet_name'." "Review NSG rule."
-                                     continue # Next rule
+                    local prohibited_sources_jq=$(echo "$subnet_req_json" | jq -c '.prohibitedInboundSources // []')
+                    if [[ $(echo "$prohibited_sources_jq" | jq '. | length') -gt 0 ]]; then
+                        echo "$nsg_rules_json" | jq -c '.[] | select(.direction == "Inbound")' | while IFS= read -r rule_json; do
+                            local rule_name=$(echo "$rule_json" | jq -r '.name')
+                            local source_prefix=$(echo "$rule_json" | jq -r '.sourceAddressPrefix // "Any"')
+                            local source_prefixes_array=$(echo "$rule_json" | jq -c '.sourceAddressPrefixes // []')
+
+                            if echo "$prohibited_sources_jq" | jq -e --arg sp "$source_prefix" '.[] | select(. == $sp)' > /dev/null; then
+                                 record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedSource" "FAILED" "NSG rule '$rule_name' allows prohibited source '$source_prefix' for subnet '$subnet_name'." "Review NSG rule."
+                                 continue
+                            fi
+                            echo "$source_prefixes_array" | jq -r '.[]' | while IFS= read -r sp_item; do
+                                if echo "$prohibited_sources_jq" | jq -e --arg sp_item_arg "$sp_item" '.[] | select(. == $sp_item_arg)' > /dev/null; then
+                                    record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedSourceArray" "FAILED" "NSG rule '$rule_name' allows prohibited source '$sp_item' (from array) for subnet '$subnet_name'." "Review NSG rule."
                                 fi
-                                # Check sourceAddressPrefixes array
-                                echo "$source_prefixes_array" | jq -r '.[]' | while IFS= read -r sp_item; do
-                                    if echo "$prohibited_sources_jq" | jq -e --arg sp_item_arg "$sp_item" '.[] | select(. == $sp_item_arg)' > /dev/null; then
-                                        record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedSourceArray" "FAILED" "NSG rule '$rule_name' allows prohibited source '$sp_item' (from array) for subnet '$subnet_name'." "Review NSG rule."
-                                        # TODO: This could report multiple times for one rule if multiple prohibited sources are in its array. Could be refined.
-                                    fi
-                                done
                             done
-                        fi # end if prohibited_sources_jq has items
+                        done
+                    fi
 
-                        local prohibited_ports_jq=$(echo "$subnet_req_json" | jq -c '.prohibitedPorts // []')
-                        if [[ $(echo "$prohibited_ports_jq" | jq '. | length') -gt 0 ]]; then
-                            log "INFO" "Checking prohibited ports for subnet '$subnet_name' (NSG: '$nsg_name'). Prohibited: $(echo "$prohibited_ports_jq" | jq -r 'join(", ")')"
-                            # Re-use nsg_rules_json if already fetched, or fetch if not (e.g. if prohibited_sources was empty)
-                            if [[ -z "$nsg_rules_json" ]]; then
-                                nsg_rules_json=$(az network nsg rule list --nsg-name "$nsg_name" --resource-group "$vnet_rg" -o json)
+                    local prohibited_ports_jq=$(echo "$subnet_req_json" | jq -c '.prohibitedPorts // []')
+                    if [[ $(echo "$prohibited_ports_jq" | jq '. | length') -gt 0 ]]; then
+                        log "INFO" "Checking prohibited ports for subnet '$subnet_name' (NSG: '$nsg_name'). Prohibited definition: $(echo "$prohibited_ports_jq" | jq -r 'join(", ")')"
+
+                        local normalized_prohibited_defs=$(_parse_protocol_port_definitions "$prohibited_ports_jq")
+
+                        echo "$nsg_rules_json" | jq -c '.[]' | while IFS= read -r rule_json_obj_str; do
+                            local rule_name=$(echo "$rule_json_obj_str" | jq -r '.name')
+                            local rule_direction=$(echo "$rule_json_obj_str" | jq -r '.direction') # For context in messages
+                            local rule_access=$(echo "$rule_json_obj_str" | jq -r '.access') # Only check Allow rules for prohibited ports
+
+                            if [[ "$rule_access" != "Allow" ]]; then
+                                continue # Skip Deny rules when checking for prohibited allowed ports
                             fi
 
-                            echo "$nsg_rules_json" | jq -c '.[]' | while IFS= read -r rule_json; do
-                                local rule_name=$(echo "$rule_json" | jq -r '.name')
-                                local direction=$(echo "$rule_json" | jq -r '.direction')
-                                local protocol=$(echo "$rule_json" | jq -r '.protocol') # Tcp, Udp, Icmp, *
-                                local dest_port_range=$(echo "$rule_json" | jq -r '.destinationPortRange // "*"')
-                                local dest_port_ranges_array=$(echo "$rule_json" | jq -c '.destinationPortRanges // []')
+                            local normalized_rule_entries=$(_parse_nsg_rule_protocols_ports "$rule_json_obj_str")
 
-                                # Helper function to check if a port/range overlaps with prohibited ports might be needed for complex cases.
-                                # Simple check: direct match of single port or "*" if "*" is prohibited.
-                                # This simplified check looks for direct matches or if a specific port in rule matches a prohibited port.
-                                # It does not fully parse ranges vs ranges yet.
-
-                                local port_check_target="$dest_port_range"
-                                if [[ "$dest_port_range" == "*" && $(echo "$dest_port_ranges_array" | jq '. | length') -gt 0 ]]; then
-                                    # If destinationPortRange is "*" but destinationPortRanges has specific values, use those.
-                                    # For simplicity, we'll just check the first one here if it exists, or rely on dest_port_range being *
-                                    # A full solution would iterate through dest_port_ranges_array.
-                                     port_check_target_from_array=$(echo "$dest_port_ranges_array" | jq -r '.[0] // "*"')
-                                     if [[ "$port_check_target_from_array" != "*" ]]; then
-                                        port_check_target="$port_check_target_from_array" # Prefer specific over wildcard if available
-                                     fi
-                                fi
-
-                                # Check if port_check_target (single port or simple range like "80", "22", "3000-4000", or "*")
-                                # is among the prohibited_ports_jq array.
-                                echo "$prohibited_ports_jq" | jq -r '.[]' | while IFS= read -r prohibited_port_entry; do
-                                    # Case 1: Prohibited port is a single port number
-                                    if [[ "$prohibited_port_entry" =~ ^[0-9]+$ ]]; then
-                                        if [[ "$port_check_target" == "$prohibited_port_entry" ]]; then
-                                            record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedPort" "FAILED" "NSG rule '$rule_name' ($direction/$protocol) uses prohibited port '$prohibited_port_entry' for subnet '$subnet_name'." "Review NSG rule."
-                                            break # Found a prohibited port for this rule
-                                        elif [[ "$port_check_target" == "*" ]]; then # Rule allows all ports, and specific port is prohibited
-                                             record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedPortWildcard" "FAILED" "NSG rule '$rule_name' ($direction/$protocol) uses wildcard '*' for ports, which includes prohibited port '$prohibited_port_entry' for subnet '$subnet_name'." "Review NSG rule."
-                                             break
-                                        fi
-                                        # Add more sophisticated range checking here if needed:
-                                        # E.g., if port_check_target is "100-200" and prohibited_port_entry is "150"
-                                        # Or if port_check_target is "150" and prohibited_port_entry is "100-200"
-                                    # Case 2: Prohibited port is "*"
-                                    elif [[ "$prohibited_port_entry" == "*" ]]; then
-                                        # If any rule defines any port (even specific ones, unless it's for an allowed overriding rule), it could be an issue.
-                                        # This usually means NO traffic on any port is allowed unless explicitly defined in an allow list.
-                                        # This check is simpler: if "*" is prohibited, any rule with a port is suspicious unless it's an overriding allow.
-                                        # For now, a simple interpretation: if "*" is prohibited, any rule specifying ports is a failure.
-                                        # This needs refinement based on how "allowedInbound/Outbound" rules would interact.
-                                        # Let's assume for now this means no rule should exist if "*" is prohibited, unless it's a default deny.
-                                        # This part is tricky and might need to be combined with allowed rules logic.
-                                        # For now, if "*" is prohibited, and the rule is not a Deny rule, it's a potential issue.
-                                        if [[ "$port_check_target" != "" && "$(echo "$rule_json" | jq -r .access)" == "Allow" ]]; then
-                                             record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-WildcardPortProhibited" "WARNING" "NSG rule '$rule_name' ($direction/$protocol) defines ports while '*' is prohibited for subnet '$subnet_name'. Review if this rule is overridden by a specific allow." "Review NSG rule."
-                                             break
-                                        fi
+                            # For each normalized prohibited definition
+                            for req_norm_entry in $normalized_prohibited_defs; do
+                                # For each normalized port/protocol the current NSG rule allows
+                                for rule_norm_entry in $normalized_rule_entries; do
+                                    if [[ $(_check_protocol_port_overlap "$req_norm_entry" "$rule_norm_entry") == "true" ]]; then
+                                        record_result "Network" "Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedPortProtocol" "FAILED" "NSG rule '$rule_name' (Direction: $rule_direction, Access: $rule_access) allows traffic on '${rule_norm_entry}', which overlaps with prohibited entry '${req_norm_entry}' for subnet '$subnet_name'." "Review NSG rule '$rule_name'."
+                                        # Could 'break 2' here to stop checking this rule if one violation is enough,
+                                        # or continue to find all overlaps for this rule. For now, report first overlap.
+                                        break # Stop checking this rule_norm_entry against other req_norm_entry
                                     fi
-                                done # </ prohibited_ports_jq loop
-                            done # </ nsg_rules_json loop
-                        fi # </ prohibited_ports_jq length check
+                                done # end loop rule_norm_entry
+                                # If an overlap was found for req_norm_entry, the inner 'break' would have been hit.
+                                # To break outer loop as well if an overlap is found for the rule:
+                                # local last_status_key="Network:Subnet-$subnet_name-NSGRule-$rule_name-ProhibitedPortProtocol"
+                                # if [[ -n "${COMPLIANCE_RESULTS[$last_status_key]}" ]] && [[ $(echo "${COMPLIANCE_RESULTS[$last_status_key]}" | jq -r .status) == "FAILED" ]]; then
+                                #    break # Stop checking this req_norm_entry against further rule_norm_entries if already failed.
+                                # fi
+                            done # end loop req_norm_entry
+                        done < <(echo "$nsg_rules_json" | jq -c '.[]') # Ensure while loop runs in current shell context for record_result
                     fi
+
+                    # Check for allowedInboundTraffic
+                    local allowed_inbound_jq=$(echo "$subnet_req_json" | jq -c '.allowedInboundTraffic // []')
+                    if [[ $(echo "$allowed_inbound_jq" | jq '. | length') -gt 0 ]]; then
+                        log "INFO" "Checking allowedInboundTraffic for subnet '$subnet_name' (NSG: '$nsg_name')."
+                        echo "$allowed_inbound_jq" | jq -c '.[]' | while IFS= read -r allowed_req_item_json; do
+                            local req_name=$(echo "$allowed_req_item_json" | jq -r '.name // "Unnamed Allowed Inbound Rule"')
+                            local req_protocol_defs_jq=$(echo "$allowed_req_item_json" | jq -c '.ports // []') # Assuming 'ports' contains array like ["Tcp:443", "Tcp:80"]
+                            local req_source_prefixes_jq=$(echo "$allowed_req_item_json" | jq -c '.sourcePrefixes // []')
+
+                            local normalized_req_protocol_ports=$(_parse_protocol_port_definitions "$req_protocol_defs_jq")
+                            local found_satisfying_nsg_rule_for_this_req=false
+
+                            for req_norm_prot_port_entry in $normalized_req_protocol_ports; do
+                                # For each actual NSG rule
+                                echo "$nsg_rules_json" | jq -c '.[]' | while IFS= read -r rule_json_obj_str; do
+                                    local nsg_rule_access=$(echo "$rule_json_obj_str" | jq -r '.access')
+                                    local nsg_rule_direction=$(echo "$rule_json_obj_str" | jq -r '.direction')
+
+                                    if [[ "$nsg_rule_access" == "Allow" && "$nsg_rule_direction" == "Inbound" ]]; then
+                                        local normalized_nsg_rule_entries=$(_parse_nsg_rule_protocols_ports "$rule_json_obj_str")
+                                        local nsg_rule_source_prefix=$(echo "$rule_json_obj_str" | jq -r '.sourceAddressPrefix // ""')
+                                        local nsg_rule_source_prefixes_array=$(echo "$rule_json_obj_str" | jq -c '.sourceAddressPrefixes // []')
+
+                                        for nsg_norm_entry in $normalized_nsg_rule_entries; do
+                                            if [[ $(_check_protocol_port_overlap "$req_norm_prot_port_entry" "$nsg_norm_entry") == "true" ]]; then
+                                                if [[ $(_check_address_overlap "$req_source_prefixes_jq" "$nsg_rule_source_prefix" "$nsg_rule_source_prefixes_array") == "true" ]]; then
+                                                    found_satisfying_nsg_rule_for_this_req=true; break 2 # Found rule for this prot_port_entry, break from nsg_rule and prot_port_entry loops
+                                                fi
+                                            fi
+                                        done # end nsg_norm_entry loop
+                                    fi
+                                done < <(echo "$nsg_rules_json" | jq -c '.[]') # nsg_rules_json loop context
+                                if $found_satisfying_nsg_rule_for_this_req; then break; fi # Break from req_norm_prot_port_entry loop
+                            done # end req_norm_prot_port_entry loop
+
+                            if ! $found_satisfying_nsg_rule_for_this_req; then
+                                record_result "Network" "Subnet-$subnet_name-MissingAllowedInbound-$req_name" "FAILED" "Required allowed inbound traffic rule '$req_name' (Ports/Proto: $normalized_req_protocol_ports, Sources: $(echo "$req_source_prefixes_jq" | jq -r .)) for subnet '$subnet_name' is not satisfied by any NSG rule." "Ensure NSG '$nsg_name' has a corresponding Allow rule."
+                            else
+                                record_result "Network" "Subnet-$subnet_name-AllowedInboundMet-$req_name" "PASSED" "Required allowed inbound traffic rule '$req_name' for subnet '$subnet_name' is satisfied." ""
+                            fi
+                        done < <(echo "$allowed_inbound_jq" | jq -c '.[]') # allowed_inbound_jq loop context
+                    fi
+
+                    # Placeholder for allowedOutboundTraffic (similar logic to inbound)
+                    local allowed_outbound_jq=$(echo "$subnet_req_json" | jq -c '.allowedOutboundTraffic // []')
+                    if [[ $(echo "$allowed_outbound_jq" | jq '. | length') -gt 0 ]]; then
+                        log "INFO" "Checking allowedOutboundTraffic for subnet '$subnet_name' (NSG: '$nsg_name')."
+                        # ... (Implementation would mirror allowedInboundTraffic but check for Direction:Outbound and destinationPrefixes) ...
+                        # For now, just log that it's a placeholder
+                        record_result "Network" "Subnet-$subnet_name-AllowedOutboundCheck" "SKIPPED" "AllowedOutboundTraffic check is not fully implemented yet for '$subnet_name'." ""
+                    fi
+
+                else
+                    log "INFO" "No specific network requirements found for subnet pattern matching '$subnet_name'. Standard NSG rules apply if any generic checks are defined later."
+                fi
+            else
+                 if [[ -z "$NETWORK_REQUIREMENTS_JSON" ]]; then
+                    log "WARNING" "NETWORK_REQUIREMENTS_JSON not loaded. Skipping detailed NSG rule validation for $nsg_name."
+                 elif [[ -z "$nsg_name" ]] || [[ -z "$nsg_rg" ]]; then
+                    log "WARNING" "NSG name or RG could not be determined for subnet $subnet_name. Skipping detailed NSG rule validation."
+                 fi
+            fi
+        fi
+    } # End of _process_subnet_for_segmentation_check helper
+
+    if [[ -n "$NETWORK_CONFIG_JSON" ]]; then
+        log "INFO" "Using network_config.json for network segmentation checks."
+        echo "$NETWORK_CONFIG_JSON" | jq -c '.virtualNetworks[]?' | while IFS= read -r vnet_config_row; do
+            local vnet_name_cfg=$(echo "$vnet_config_row" | jq -r '.name')
+            # VNet RG might be part of VNet config or assumed globally.
+            # If NSG IDs in config are full Azure IDs, vnet_rg_cfg might not be strictly needed for NSG rule fetching.
+            # However, it's good practice to have it or derive it if possible.
+            local vnet_rg_cfg=$(echo "$vnet_config_row" | jq -r '.resourceGroup // ""')
+            if [[ -z "$vnet_rg_cfg" ]]; then
+                # Attempt to derive from VNet ID if present in config, otherwise use global default
+                local vnet_id_cfg=$(echo "$vnet_config_row" | jq -r '.id // ""')
+                if [[ -n "$vnet_id_cfg" ]]; then
+                     vnet_rg_cfg=$(echo "$vnet_id_cfg" | awk -F'/' '{if (NF>=9 && $(NF-4)=="resourceGroups") print $(NF-3); else print ""}')
+                fi
+                if [[ -z "$vnet_rg_cfg" ]]; then # If still empty, fallback to global $RESOURCE_GROUP
+                    vnet_rg_cfg="$RESOURCE_GROUP" # Global script parameter
+                    log "INFO" "VNet '$vnet_name_cfg' from config does not specify resourceGroup, using global script parameter: '$vnet_rg_cfg'."
                 fi
             fi
+            log "INFO" "Checking VNet (from config): $vnet_name_cfg in RG: ${vnet_rg_cfg:-'Not Specified, will derive or use default'}"
+
+            echo "$vnet_config_row" | jq -c '.subnets[]?' | while IFS= read -r subnet_config_row; do
+                local subnet_name_cfg=$(echo "$subnet_config_row" | jq -r '.name')
+                local subnet_id_cfg=$(echo "$subnet_config_row" | jq -r '.id // empty')
+                # Try to find NSG reference, accommodate common variations like 'networkSecurityGroupRef.id' or 'networkSecurityGroup.id'
+                local nsg_id_cfg=$(echo "$subnet_config_row" | jq -r '.networkSecurityGroupRef.id // .networkSecurityGroup.id // .nsgRef // .nsg.id // empty')
+
+                _process_subnet_for_segmentation_check "$vnet_name_cfg" "$vnet_rg_cfg" "$subnet_name_cfg" "$subnet_id_cfg" "$nsg_id_cfg"
+            done
         done
-    done
-    
-    # General "overly permissive rules" check (can be kept or refined)
-    log "INFO" "Performing general check for overly permissive NSG rules..."
-    local all_nsgs_json=$(az network nsg list --query "[].{name:name, resourceGroup:resourceGroup, securityRules:securityRules}" -o json)
-    
-    echo "$all_nsgs_json" | jq -c '.[]' | while IFS= read -r nsg_row; do
-        local nsg_name=$(echo "$nsg_row" | jq -r '.name')
-        local nsg_rg=$(echo "$nsg_row" | jq -r '.resourceGroup')
-        
-        # Original generic check for "any" source allowing inbound
-        echo "$nsg_row" | jq -c '.securityRules[]? | select(.sourceAddressPrefix == "*" and .access == "Allow" and .direction == "Inbound")' | while IFS= read -r permissive_rule_json; do
-             if [[ -n "$permissive_rule_json" ]]; then # Check if anything was selected
-                local rule_name=$(echo "$permissive_rule_json" | jq -r '.name')
-                record_result "Network" "GenericPermissiveRule-$nsg_name-$rule_name" "WARNING" "NSG $nsg_name (RG: $nsg_rg) rule '$rule_name' allows * source for Inbound traffic." "Restrict source address for rule '$rule_name'."
-             fi
+    else
+        log "INFO" "network_config.json not loaded or empty. Falling back to dynamic discovery of network resources."
+        local vnets_dynamic=$(az network vnet list --query "[].{name:name, resourceGroup:resourceGroup}" -o json 2>/dev/null)
+        if [ $? -ne 0 ] || [[ -z "$vnets_dynamic" ]]; then
+            log "ERROR" "Failed to list VNets dynamically."
+            record_result "Network" "VNetListing" "FAILED" "Could not list VNets dynamically for segmentation checks." "Check Azure CLI permissions and connectivity."
+            return
+        fi
+
+        for vnet_row_dyn in $(echo "$vnets_dynamic" | jq -c '.[]'); do
+            local vnet_name_dyn=$(echo "$vnet_row_dyn" | jq -r '.name')
+            local vnet_rg_dyn=$(echo "$vnet_row_dyn" | jq -r '.resourceGroup')
+            log "INFO" "Checking VNet (dynamic): $vnet_name_dyn in resource group: $vnet_rg_dyn"
+
+            local subnets_json_dyn=$(az network vnet subnet list --vnet-name "$vnet_name_dyn" --resource-group "$vnet_rg_dyn" -o json 2>/dev/null)
+            if [ $? -ne 0 ] || [[ -z "$subnets_json_dyn" ]]; then
+                 log "WARNING" "Failed to list subnets for VNet '$vnet_name_dyn' or VNet has no subnets."
+                 continue
+            fi
+
+            for subnet_row_dyn in $(echo "$subnets_json_dyn" | jq -c '.[]'); do
+                local subnet_name_dyn=$(echo "$subnet_row_dyn" | jq -r '.name')
+                local subnet_id_dyn=$(echo "$subnet_row_dyn" | jq -r '.id')
+                local nsg_id_dyn=$(echo "$subnet_row_dyn" | jq -r '.networkSecurityGroup.id // empty')
+                _process_subnet_for_segmentation_check "$vnet_name_dyn" "$vnet_rg_dyn" "$subnet_name_dyn" "$subnet_id_dyn" "$nsg_id_dyn"
+            done
         done
-    done
+    fi
+    
+    # General "overly permissive rules" check (can be kept or refined - currently outside config-driven loop)
+    # This part needs to decide if it uses config-defined NSGs or all NSGs.
+    # For now, let's keep it as a general sweep, but it could be integrated.
+    log "INFO" "Performing general check for overly permissive NSG rules across all NSGs (dynamic discovery)..."
+    local all_nsgs_json=$(az network nsg list --query "[].{name:name, resourceGroup:resourceGroup, securityRules:securityRules}" -o json 2>/dev/null)
+    if [ $? -eq 0 ] && [[ -n "$all_nsgs_json" ]]; then
+        echo "$all_nsgs_json" | jq -c '.[]' | while IFS= read -r nsg_row; do
+            local nsg_name=$(echo "$nsg_row" | jq -r '.name')
+            local nsg_rg=$(echo "$nsg_row" | jq -r '.resourceGroup')
+
+            echo "$nsg_row" | jq -c '.securityRules[]? | select(.sourceAddressPrefix == "*" and .access == "Allow" and .direction == "Inbound")' | while IFS= read -r permissive_rule_json; do
+                 if [[ -n "$permissive_rule_json" ]]; then
+                    local rule_name=$(echo "$permissive_rule_json" | jq -r '.name')
+                    record_result "Network" "GenericPermissiveRule-$nsg_name-$rule_name" "WARNING" "NSG $nsg_name (RG: $nsg_rg) rule '$rule_name' allows * source for Inbound traffic." "Restrict source address for rule '$rule_name'."
+                 fi
+            done
+        done
+    else
+        log "WARNING" "Could not list all NSGs for general permissive rule check or no NSGs found."
+    fi
 }
 
 # Function to check general network requirements (New)
@@ -427,7 +745,7 @@ function check_general_network_requirements {
     if [[ "$default_deny_all_inbound" == "true" ]]; then
         log "INFO" "Verifying defaultDenyAllInbound requirement for all NSGs..."
         local all_nsgs_for_deny_check=$(az network nsg list --query "[].{name:name, resourceGroup:resourceGroup, securityRules:securityRules}" -o json)
-
+        
         echo "$all_nsgs_for_deny_check" | jq -c '.[]' | while IFS= read -r nsg_row; do
             local nsg_name=$(echo "$nsg_row" | jq -r '.name')
             local nsg_rg=$(echo "$nsg_row" | jq -r '.resourceGroup')

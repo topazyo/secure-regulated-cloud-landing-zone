@@ -26,7 +26,8 @@
         "sourceAddressPrefixes": ["Any", "Internet", "0.0.0.0/0", "::/0"],
         "destinationPortRange": ["22", "3389", "1433", "3306"]
       },
-      "expectedResult": "NotExists"
+      "expectedResult": "NotExists",
+      "remediationSuggestion": "Review the identified NSG rules. If the 'Any' or 'Internet' source is not justified for the specified critical ports (22, 3389, 1433, 3306), update the rule to a more specific source IP range or remove the rule. Example: az network nsg rule update --nsg-name <nsg-name> --name <rule-name> --resource-group <rg-name> --source-address-prefixes <specific-IPs>"
     },
     {
       "id": "NET_NSG_SUBNET_ATTACHMENT",
@@ -56,7 +57,8 @@
       "targetScope": "AllKeyVaults",
       "expectedConfiguration": {
         "enableSoftDelete": true
-      }
+      },
+      "remediationSuggestion": "Enable soft delete for the Azure Key Vault. Use Azure portal (Key Vault -> Properties -> Soft-delete) or CLI: az keyvault update --name <kv-name> --resource-group <rg-name> --enable-soft-delete true"
     },
     {
       "id": "ENC_KV_PURGE_PROTECTION",
@@ -103,8 +105,9 @@
       "description": "Limit the number of Owner role assignments on subscriptions (e.g., max 3).",
       "controlType": "RBACCheck",
       "targetScope": "Subscription",
-      "roleDefinitionId": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635", // Owner Role ID
-      "maxAssignments": 3
+      "roleDefinitionId": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+      "maxAssignments": 3,
+      "remediationSuggestion": "Review Owner role assignments on the subscription. Remove any unnecessary assignments. Navigate to Azure portal -> Subscriptions -> <Your Subscription> -> Access control (IAM) -> Role assignments. Filter by Role 'Owner'."
     },
     {
       "id": "IAM_NO_WILDCARD_CUSTOM_ROLES",
@@ -122,7 +125,8 @@
       "targetResourceType": "Microsoft.KeyVault/vaults",
       "requiredLogs": ["AuditEvent"],
       "requiredMetrics": [],
-      "minRetentionDays": 90
+      "minRetentionDays": 90,
+      "remediationSuggestion": "Enable diagnostic settings for the Key Vault to send AuditEvent logs to a Log Analytics workspace or Storage Account. Use Azure portal (Key Vault -> Diagnostic settings -> Add diagnostic setting) or CLI: az monitor diagnostic-settings create --name <setting-name> --resource <kv-id> --logs '[{\"category\": \"AuditEvent\",\"enabled\": true}]' --workspace <la-workspace-id> or --storage-account <storage-id>"
     },
     {
       "id": "LOG_NSG_FLOWLOGS",
@@ -142,10 +146,10 @@
       "id": "LOG_ACTIVITY_LOG_RETENTION",
       "category": "LoggingAndMonitoring",
       "description": "Azure Activity Log must be retained for at least 365 days.",
-      "controlType": "ActivityLogAlerts", // Actually diagnostic settings for subscription
+      "controlType": "ActivityLogAlerts",
       "targetScope": "Subscription",
        "expectedConfiguration": {
-        "storageAccountId": "NotNull", // Or specific LA workspace
+        "storageAccountId": "NotNull",
         "retentionPolicy": {
           "enabled": true,
           "days": ">=365"
@@ -158,7 +162,7 @@
       "category": "LoggingAndMonitoring",
       "description": "Default Log Analytics workspace retention should be >= 365 days.",
       "controlType": "LogAnalyticsWorkspace",
-      "targetScope": "DefaultWorkspace", // Or all workspaces
+      "targetScope": "DefaultWorkspace",
       "expectedConfiguration": {
         "retentionInDays": ">=365"
       }
@@ -178,9 +182,9 @@
       "category": "Regulatory_PCI-DSS",
       "controlReference": "PCI-DSS Req 1.2, 1.3",
       "description": "Network segmentation for Cardholder Data Environment (CDE) subnets must be enforced via NSGs, restricting traffic to only what is necessary.",
-      "controlType": "SubnetCompliance", // This would link to network_requirements.json
+      "controlType": "SubnetCompliance",
       "targetScopePatterns": ["pci-zone-.*"],
-      "complianceProfile": "pci-dss" // Points to a profile in network_requirements.json
+      "complianceProfile": "pci-dss"
     },
     {
       "id": "PCI_ENC_CHD_AT_REST",
