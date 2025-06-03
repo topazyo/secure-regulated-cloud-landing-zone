@@ -1,0 +1,134 @@
+{
+  "virtualNetworks": [
+    {
+      "name": "primary-vnet",
+      "addressSpace": "10.0.0.0/16",
+      "location": "EastUS",
+      "subnets": [
+        {
+          "name": "frontend-subnet",
+          "addressPrefix": "10.0.1.0/24",
+          "nsgName": "frontend-nsg"
+        },
+        {
+          "name": "backend-subnet",
+          "addressPrefix": "10.0.2.0/24",
+          "nsgName": "backend-nsg"
+        },
+        {
+          "name": "management-subnet",
+          "addressPrefix": "10.0.3.0/24",
+          "nsgName": "management-nsg"
+        }
+      ]
+    }
+  ],
+  "networkSecurityGroups": [
+    {
+      "name": "frontend-nsg",
+      "location": "EastUS",
+      "rules": [
+        {
+          "name": "AllowHTTPS_Inbound",
+          "priority": 100,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "443",
+          "sourceAddressPrefix": "Internet",
+          "destinationAddressPrefix": "*"
+        },
+        {
+          "name": "AllowSSH_Management_Inbound",
+          "priority": 200,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "22",
+          "sourceAddressPrefix": "YOUR_MGMT_IP_OR_BASTION_SUBNET",
+          "destinationAddressPrefix": "*"
+        },
+        {
+          "name": "DenyAll_Inbound_Default",
+          "priority": 4090,
+          "direction": "Inbound",
+          "access": "Deny",
+          "protocol": "*",
+          "sourcePortRange": "*",
+          "destinationPortRange": "*",
+          "sourceAddressPrefix": "*",
+          "destinationAddressPrefix": "*"
+        }
+      ]
+    },
+    {
+      "name": "backend-nsg",
+      "location": "EastUS",
+      "rules": [
+        {
+          "name": "AllowBackendTraffic_FromFrontend",
+          "priority": 100,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "8080",
+          "sourceAddressPrefix": "10.0.1.0/24",
+          "destinationAddressPrefix": "*"
+        },
+        {
+          "name": "AllowSSH_Management_Inbound",
+          "priority": 200,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "22",
+          "sourceAddressPrefix": "YOUR_MGMT_IP_OR_BASTION_SUBNET",
+          "destinationAddressPrefix": "*"
+        },
+        {
+          "name": "DenyAll_Inbound_Default",
+          "priority": 4090,
+          "direction": "Inbound",
+          "access": "Deny",
+          "protocol": "*",
+          "sourcePortRange": "*",
+          "destinationPortRange": "*",
+          "sourceAddressPrefix": "*",
+          "destinationAddressPrefix": "*"
+        }
+      ]
+    },
+    {
+      "name": "management-nsg",
+      "location": "EastUS",
+      "rules": [
+        {
+          "name": "AllowSSH_Inbound_From_Specific_IP",
+          "priority": 100,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "sourcePortRange": "*",
+          "destinationPortRange": "22",
+          "sourceAddressPrefix": "YOUR_HOME_OFFICE_IP",
+          "destinationAddressPrefix": "*"
+        },
+        {
+          "name": "DenyAll_Inbound_Default",
+          "priority": 4090,
+          "direction": "Inbound",
+          "access": "Deny",
+          "protocol": "*",
+          "sourcePortRange": "*",
+          "destinationPortRange": "*",
+          "sourceAddressPrefix": "*",
+          "destinationAddressPrefix": "*"
+        }
+      ]
+    }
+  ]
+}

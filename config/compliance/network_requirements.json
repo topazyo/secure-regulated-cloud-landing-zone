@@ -1,0 +1,132 @@
+{
+  "generalRequirements": {
+    "defaultDenyAllInbound": true,
+    "defaultDenyAllOutbound": false,
+    "requireFlowLogging": true,
+    "prohibitedGlobalSourceRanges": ["0.0.0.0/0", "::/0"],
+    "allowedManagementProtocols": {
+      "ssh": "Tcp:22",
+      "rdp": "Tcp:3389"
+    },
+    "requireDdosProtection": true
+  },
+  "subnetSpecificRequirements": [
+    {
+      "subnetNamePattern": "pci-zone-.*",
+      "description": "Requirements for subnets handling Cardholder Data (PCI-DSS).",
+      "mustExist": true,
+      "allowedInbound": [
+        {
+          "name": "Allow_AppTraffic_From_Frontend",
+          "protocol": "Tcp",
+          "ports": ["443", "8443"],
+          "sourcePrefixes": ["10.0.1.0/24"],
+          "destinationPrefixes": ["self"]
+        },
+        {
+          "name": "Allow_Management_From_Jumpbox",
+          "protocol": "Tcp",
+          "ports": ["22"],
+          "sourcePrefixes": ["10.0.3.0/24"], // Example: management-subnet
+          "destinationPrefixes": ["self"]
+        }
+      ],
+      "allowedOutbound": [
+        {
+          "name": "Allow_DB_Access",
+          "protocol": "Tcp",
+          "ports": ["1433", "3306"],
+          "sourcePrefixes": ["self"],
+          "destinationPrefixes": ["10.0.5.0/24"] // Example: database-subnet
+        },
+        {
+          "name": "Allow_Patching_Internal",
+          "protocol": "Tcp",
+          "ports": ["80", "443"],
+          "sourcePrefixes": ["self"],
+          "destinationPrefixes": ["10.0.100.0/24"] // Example: internal patching server
+        }
+      ],
+      "prohibitedInboundSources": ["0.0.0.0/0", "::/0", "Internet"],
+      "prohibitedOutboundDestinations": ["0.0.0.0/0", "::/0", "Internet"],
+      "prohibitedPorts": ["20", "21", "23", "80"], // Example: FTP, Telnet, HTTP
+      "requireNsg": true,
+      "maxUnrestrictedRules": 0
+    },
+    {
+      "subnetNamePattern": "database-subnet-.*",
+      "description": "Requirements for subnets hosting critical databases.",
+      "mustExist": true,
+      "allowedInbound": [
+        {
+          "name": "Allow_DB_Traffic_From_PCI_And_Backend",
+          "protocol": "Tcp",
+          "ports": ["1433", "3306", "5432"],
+          "sourcePrefixes": ["10.0.2.0/24", "10.0.4.0/24"], // Example: backend-subnet, pci-zone
+          "destinationPrefixes": ["self"]
+        },
+        {
+          "name": "Allow_Management_From_Jumpbox",
+          "protocol": "Tcp",
+          "ports": ["22"],
+          "sourcePrefixes": ["10.0.3.0/24"], // Example: management-subnet
+          "destinationPrefixes": ["self"]
+        }
+      ],
+      "allowedOutbound": [
+         {
+          "name": "Allow_Logging_To_SIEM",
+          "protocol": "Udp",
+          "ports": ["514"],
+          "sourcePrefixes": ["self"],
+          "destinationPrefixes": ["10.0.200.0/24"] // Example: SIEM collector
+        }
+      ],
+      "prohibitedInboundSources": ["0.0.0.0/0", "::/0", "Internet"],
+      "prohibitedOutboundDestinations": ["0.0.0.0/0", "::/0", "Internet"],
+      "prohibitedPorts": ["80"],
+      "requireNsg": true,
+      "maxUnrestrictedRules": 0
+    },
+    {
+      "subnetNamePattern": "frontend-subnet-.*",
+      "description": "Requirements for public-facing frontend applications.",
+      "mustExist": true,
+      "allowedInbound": [
+        {
+          "name": "Allow_HTTPS_From_Internet",
+          "protocol": "Tcp",
+          "ports": ["443"],
+          "sourcePrefixes": ["Internet"],
+          "destinationPrefixes": ["self"]
+        },
+        {
+          "name": "Allow_Management_From_Jumpbox",
+          "protocol": "Tcp",
+          "ports": ["22"],
+          "sourcePrefixes": ["10.0.3.0/24"],
+          "destinationPrefixes": ["self"]
+        }
+      ],
+      "allowedOutbound": [
+        {
+          "name": "Allow_AppTraffic_To_Backend",
+          "protocol": "Tcp",
+          "ports": ["8080", "8443"],
+          "sourcePrefixes": ["self"],
+          "destinationPrefixes": ["10.0.2.0/24"] // Example: backend-subnet
+        },
+        {
+          "name": "Allow_AppTraffic_To_PCI_Zone",
+          "protocol": "Tcp",
+          "ports": ["443", "8443"],
+          "sourcePrefixes": ["self"],
+          "destinationPrefixes": ["10.0.4.0/24"] // Example: pci-zone (if applicable)
+        }
+      ],
+      "prohibitedPorts": ["20", "21", "23", "80"],
+      "requireNsg": true,
+      "maxUnrestrictedRules": 1 // Allow one rule for HTTPS from Internet
+    }
+  ]
+}
