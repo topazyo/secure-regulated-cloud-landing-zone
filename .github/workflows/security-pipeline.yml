@@ -15,15 +15,17 @@ jobs:
         uses: aquasecurity/tfsec-action@v1.0.0
         
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v2
+        uses: github/codeql-action/init@v3
         with:
           languages: typescript, javascript
       
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v2
+        uses: github/codeql-action/analyze@v3
         
       - name: Check for Secrets
         uses: zricethezav/gitleaks-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
       - name: Compliance Check
         run: |
