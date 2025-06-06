@@ -109,6 +109,7 @@ else
         log_message "Successfully initiated creation of new version for key '$KEY_NAME'. Could not parse new version ID from output."
         log_message "Full Azure CLI output: $AZ_CREATE_OUTPUT"
     fi
+fi
 
 log_message "Key rotation process completed for key '$KEY_NAME' in Key Vault '$KEY_VAULT_NAME'."
 
