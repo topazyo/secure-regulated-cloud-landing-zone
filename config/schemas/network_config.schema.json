@@ -1,0 +1,259 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Azure Network Configuration",
+  "description": "Defines the intended Azure network topology, including Virtual Networks, subnets, Network Security Groups, and their rules.",
+  "type": "object",
+  "properties": {
+    "virtualNetworks": {
+      "type": "array",
+      "description": "A list of Virtual Network configurations.",
+      "items": { "$ref": "#/definitions/virtualNetwork" }
+    },
+    "networkSecurityGroups": {
+      "type": "array",
+      "description": "A list of Network Security Group configurations.",
+      "items": { "$ref": "#/definitions/networkSecurityGroup" }
+    },
+    "routeTables": {
+        "type": "array",
+        "description": "A list of Route Table configurations.",
+        "items": { "$ref": "#/definitions/routeTable" }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "virtualNetwork": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the Virtual Network."
+        },
+        "id": {
+          "type": "string",
+          "description": "Optional: Full Azure Resource ID of the VNet. If provided, other fields like resourceGroup and location might be derived or validated against it."
+        },
+        "resourceGroup": {
+          "type": "string",
+          "description": "Name of the resource group where the VNet resides. Can be optional if a global RG is assumed or ID is provided."
+        },
+        "location": {
+          "type": "string",
+          "description": "Azure region where the VNet is deployed."
+        },
+        "addressSpace": {
+          "type": "array",
+          "items": { "type": "string", "format": "ipv4-cidr" },
+          "description": "An array of address prefixes for the VNet (e.g., ['10.0.0.0/16'])."
+        },
+        "subnets": {
+          "type": "array",
+          "description": "A list of subnets within this Virtual Network.",
+          "items": { "$ref": "#/definitions/subnet" }
+        },
+        "ddosProtectionPlanId": {
+            "type": "string",
+            "description": "Optional: Resource ID of the DDoS Protection Plan associated with this VNet."
+        }
+      },
+      "required": [
+        "name",
+        "location",
+        "addressSpace",
+        "subnets"
+      ],
+      "additionalProperties": false
+    },
+    "subnet": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the subnet."
+        },
+        "id": {
+          "type": "string",
+          "description": "Optional: Full Azure Resource ID of the subnet."
+        },
+        "addressPrefix": {
+          "type": "string",
+          "format": "ipv4-cidr",
+          "description": "Address prefix for the subnet (e.g., '10.0.1.0/24')."
+        },
+        "networkSecurityGroupRef": {
+          "type": "object",
+          "description": "Reference to a Network Security Group associated with this subnet.",
+          "properties": {
+            "name": {"type": "string", "description": "Name of the NSG (if defined in this file or existing by name in the same RG as VNet)."},
+            "id": {"type": "string", "description": "Full Azure Resource ID of the NSG."}
+          },
+          "oneOf": [
+            {"required": ["name"]},
+            {"required": ["id"]}
+          ]
+        },
+        "routeTableRef": {
+          "type": "object",
+          "description": "Reference to a Route Table associated with this subnet.",
+           "properties": {
+            "name": {"type": "string", "description": "Name of the Route Table."},
+            "id": {"type": "string", "description": "Full Azure Resource ID of the Route Table."}
+          },
+          "oneOf": [
+            {"required": ["name"]},
+            {"required": ["id"]}
+          ]
+        },
+        "serviceEndpoints": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "List of service endpoints configured for this subnet (e.g., 'Microsoft.Storage')."
+        }
+      },
+      "required": [
+        "name",
+        "addressPrefix"
+      ],
+      "additionalProperties": false
+    },
+    "networkSecurityGroup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the Network Security Group."
+        },
+        "id": {
+          "type": "string",
+          "description": "Optional: Full Azure Resource ID of the NSG."
+        },
+        "resourceGroup": {
+          "type": "string",
+          "description": "Name of the resource group where the NSG resides."
+        },
+        "location": {
+          "type": "string",
+          "description": "Azure region where the NSG is deployed."
+        },
+        "securityRules": {
+          "type": "array",
+          "description": "A list of security rules for this NSG.",
+          "items": { "$ref": "#/definitions/securityRule" }
+        }
+      },
+      "required": [
+        "name",
+        "location",
+        "securityRules"
+      ],
+      "additionalProperties": false
+    },
+    "securityRule": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the security rule."
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 4096,
+          "description": "Priority of the rule (100-4096)."
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["Inbound", "Outbound"],
+          "description": "Direction of traffic (Inbound or Outbound)."
+        },
+        "access": {
+          "type": "string",
+          "enum": ["Allow", "Deny"],
+          "description": "Access type (Allow or Deny)."
+        },
+        "protocol": {
+          "type": "string",
+          "enum": ["Tcp", "Udp", "Icmp", "Esp", "Ah", "*", "Any"],
+          "description": "Protocol (Tcp, Udp, Icmp, Esp, Ah, *)."
+        },
+        "sourcePortRange": {
+          "type": "string",
+          "description": "Source port or range (e.g., '*', '80', '1024-65535')."
+        },
+        "destinationPortRange": {
+          "type": "string",
+          "description": "Destination port or range."
+        },
+        "sourcePortRanges": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Multiple source port ranges."
+        },
+        "destinationPortRanges": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Multiple destination port ranges."
+        },
+        "sourceAddressPrefix": {
+          "type": "string",
+          "description": "Source address prefix or tag (e.g., '10.0.0.0/16', 'VirtualNetwork', 'Internet', '*')."
+        },
+        "sourceAddressPrefixes": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Multiple source address prefixes/tags."
+        },
+        "destinationAddressPrefix": {
+          "type": "string",
+          "description": "Destination address prefix or tag."
+        },
+        "destinationAddressPrefixes": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Multiple destination address prefixes/tags."
+        },
+        "description": {
+            "type": "string",
+            "description": "Optional description for the security rule."
+        }
+      },
+      "required": [
+        "name",
+        "priority",
+        "direction",
+        "access",
+        "protocol"
+      ],
+      "additionalProperties": false
+    },
+    "routeTable": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "id": {"type": "string"},
+            "resourceGroup": {"type": "string"},
+            "location": {"type": "string"},
+            "routes": {
+                "type": "array",
+                "items": { "$ref": "#/definitions/route" }
+            }
+        },
+        "required": ["name", "location"],
+        "additionalProperties": false
+    },
+    "route": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "addressPrefix": {"type": "string", "format": "ipv4-cidr"},
+            "nextHopType": {
+                "type": "string",
+                "enum": ["VirtualNetworkGateway", "VnetLocal", "Internet", "VirtualAppliance", "None"]
+            },
+            "nextHopIpAddress": {"type": "string", "format": "ipv4", "description": "Required if nextHopType is VirtualAppliance."}
+        },
+        "required": ["name", "addressPrefix", "nextHopType"],
+        "additionalProperties": false
+    }
+  }
+}

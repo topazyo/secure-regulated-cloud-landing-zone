@@ -1,0 +1,269 @@
+{
+  "criticalControls": [
+    {
+      "id": "NET_NSG_DEFAULT_DENY",
+      "category": "NetworkSecurity",
+      "description": "Ensure default NSG rules include a deny-all for inbound traffic.",
+      "controlType": "NSGConfig",
+      "targetScope": "AllNSGs",
+      "expectedConfiguration": {
+        "defaultInboundRule": {
+          "access": "Deny",
+          "protocol": "*",
+          "direction": "Inbound",
+          "priorityRange": "4000-4096"
+        }
+      }
+    },
+    {
+      "id": "NET_NSG_NO_ANY_ALLOW",
+      "category": "NetworkSecurity",
+      "description": "Verify no NSG rules allow 'Any' or 'Internet' source for critical ports without justification.",
+      "controlType": "NSGRuleCheck",
+      "targetScope": "AllNSGs",
+      "ruleCriteria": {
+        "access": "Allow",
+        "sourceAddressPrefixes": ["Any", "Internet", "0.0.0.0/0", "::/0"],
+        "destinationPortRange": ["22", "3389", "1433", "3306"]
+      },
+      "expectedResult": "NotExists",
+      "remediationSuggestion": "Review the identified NSG rules. If the 'Any' or 'Internet' source is not justified for the specified critical ports (22, 3389, 1433, 3306), update the rule to a more specific source IP range or remove the rule. Example: az network nsg rule update --nsg-name <nsg-name> --name <rule-name> --resource-group <rg-name> --source-address-prefixes <specific-IPs>"
+    },
+    {
+      "id": "NET_NSG_SUBNET_ATTACHMENT",
+      "category": "NetworkSecurity",
+      "description": "Ensure all subnets have an NSG attached.",
+      "controlType": "SubnetConfig",
+      "targetScope": "AllSubnets",
+      "expectedConfiguration": {
+        "nsgAttached": true
+      }
+    },
+    {
+      "id": "ENC_KV_SKU_PREMIUM",
+      "category": "Encryption",
+      "description": "Azure Key Vault SKU must be 'Premium' for HSM-backed keys.",
+      "controlType": "KeyVaultProperties",
+      "targetScope": "AllKeyVaults",
+      "expectedConfiguration": {
+        "sku": "Premium"
+      }
+    },
+    {
+      "id": "ENC_KV_SOFT_DELETE",
+      "category": "Encryption",
+      "description": "Azure Key Vault must have soft delete enabled.",
+      "controlType": "KeyVaultProperties",
+      "targetScope": "AllKeyVaults",
+      "expectedConfiguration": {
+        "enableSoftDelete": true
+      },
+      "remediationSuggestion": "Enable soft delete for the Azure Key Vault. Use Azure portal (Key Vault -> Properties -> Soft-delete) or CLI: az keyvault update --name <kv-name> --resource-group <rg-name> --enable-soft-delete true"
+    },
+    {
+      "id": "ENC_KV_PURGE_PROTECTION",
+      "category": "Encryption",
+      "description": "Azure Key Vault must have purge protection enabled.",
+      "controlType": "KeyVaultProperties",
+      "targetScope": "AllKeyVaults",
+      "expectedConfiguration": {
+        "enablePurgeProtection": true
+      }
+    },
+    {
+      "id": "ENC_KV_KEY_EXPIRATION",
+      "category": "Encryption",
+      "description": "HSM Keys in Key Vault should have an expiration date set (e.g., within 1 year).",
+      "controlType": "KeyVaultKeyProperties",
+      "targetScope": "AllHSMKeys",
+      "expectedConfiguration": {
+        "attributes": {
+          "expires": true,
+          "maxValidityDays": 365
+        }
+      }
+    },
+    {
+      "id": "ENC_STORAGE_ENCRYPTION_CMK",
+      "category": "Encryption",
+      "description": "Storage accounts must use Customer-Managed Keys (CMK) from Key Vault for encryption.",
+      "controlType": "StorageAccountProperties",
+      "targetScope": "AllStorageAccounts",
+      "expectedConfiguration": {
+        "encryption": {
+          "services": {
+            "blob": {"keyType": "Account"},
+            "file": {"keyType": "Account"}
+          },
+          "keySource": "Microsoft.Keyvault"
+        }
+      }
+    },
+    {
+      "id": "IAM_LIMIT_OWNER_ROLES",
+      "category": "IdentityAndAccess",
+      "description": "Limit the number of Owner role assignments on subscriptions (e.g., max 3).",
+      "controlType": "RBACCheck",
+      "targetScope": "Subscription",
+      "roleDefinitionId": "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+      "maxAssignments": 3,
+      "remediationSuggestion": "Review Owner role assignments on the subscription. Remove any unnecessary assignments. Navigate to Azure portal -> Subscriptions -> <Your Subscription> -> Access control (IAM) -> Role assignments. Filter by Role 'Owner'."
+    },
+    {
+      "id": "IAM_NO_WILDCARD_CUSTOM_ROLES",
+      "category": "IdentityAndAccess",
+      "description": "Ensure no custom IAM roles grant wildcard permissions (e.g., */*).",
+      "controlType": "CustomRoleCheck",
+      "targetScope": "AllCustomRoles",
+      "prohibitedPermissions": ["*/*"]
+    },
+    {
+      "id": "LOG_KV_DIAGNOSTICS",
+      "category": "LoggingAndMonitoring",
+      "description": "Key Vault diagnostic settings must be enabled, capturing at least AuditEvent.",
+      "controlType": "DiagnosticSettings",
+      "targetResourceType": "Microsoft.KeyVault/vaults",
+      "requiredLogs": ["AuditEvent"],
+      "requiredMetrics": [],
+      "minRetentionDays": 90,
+      "remediationSuggestion": "Enable diagnostic settings for the Key Vault to send AuditEvent logs to a Log Analytics workspace or Storage Account. Use Azure portal (Key Vault -> Diagnostic settings -> Add diagnostic setting) or CLI: az monitor diagnostic-settings create --name <setting-name> --resource <kv-id> --logs '[{\"category\": \"AuditEvent\",\"enabled\": true}]' --workspace <la-workspace-id> or --storage-account <storage-id>"
+    },
+    {
+      "id": "LOG_NSG_FLOWLOGS",
+      "category": "LoggingAndMonitoring",
+      "description": "NSG flow logs must be enabled and retained for at least 90 days.",
+      "controlType": "NSGFlowLogs",
+      "targetScope": "AllNSGs",
+      "expectedConfiguration": {
+        "enabled": true,
+        "retentionPolicy": {
+          "enabled": true,
+          "days": ">=90"
+        }
+      }
+    },
+    {
+      "id": "LOG_ACTIVITY_LOG_RETENTION",
+      "category": "LoggingAndMonitoring",
+      "description": "Azure Activity Log must be retained for at least 365 days.",
+      "controlType": "ActivityLogAlerts",
+      "targetScope": "Subscription",
+       "expectedConfiguration": {
+        "storageAccountId": "NotNull",
+        "retentionPolicy": {
+          "enabled": true,
+          "days": ">=365"
+        },
+        "categories": ["Administrative", "Security", "ServiceHealth", "Alert", "Recommendation", "Policy", "Autoscale"]
+      }
+    },
+    {
+      "id": "LOG_LA_WORKSPACE_RETENTION",
+      "category": "LoggingAndMonitoring",
+      "description": "Default Log Analytics workspace retention should be >= 365 days.",
+      "controlType": "LogAnalyticsWorkspace",
+      "targetScope": "DefaultWorkspace",
+      "expectedConfiguration": {
+        "retentionInDays": ">=365"
+      }
+    },
+    {
+      "id": "LOG_SENTINEL_ENABLED",
+      "category": "LoggingAndMonitoring",
+      "description": "Microsoft Sentinel (or Azure Security Insights) should be enabled on the primary Log Analytics workspace.",
+      "controlType": "SentinelCheck",
+      "targetScope": "PrimaryLogAnalyticsWorkspace",
+      "expectedConfiguration": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "PCI_NET_SEGMENTATION_CDE",
+      "category": "Regulatory_PCI-DSS",
+      "controlReference": "PCI-DSS Req 1.2, 1.3",
+      "description": "Network segmentation for Cardholder Data Environment (CDE) subnets must be enforced via NSGs, restricting traffic to only what is necessary.",
+      "controlType": "SubnetCompliance",
+      "targetScopePatterns": ["pci-zone-.*"],
+      "complianceProfile": "pci-dss"
+    },
+    {
+      "id": "PCI_ENC_CHD_AT_REST",
+      "category": "Regulatory_PCI-DSS",
+      "controlReference": "PCI-DSS Req 3.4",
+      "description": "Cardholder Data (CHD) must be encrypted at rest using strong cryptography (e.g., AES-256 via CMK in Key Vault).",
+      "controlType": "MultiCheck",
+      "checks": [
+        {"controlId": "ENC_STORAGE_ENCRYPTION_CMK", "targetScope": "StorageAccountsWithCHD"},
+        {"controlId": "ENC_KV_SKU_PREMIUM", "targetScope": "KeyVaultsForCHD"}
+      ]
+    },
+    {
+      "id": "PCI_LOG_AUDIT_TRAILS",
+      "category": "Regulatory_PCI-DSS",
+      "controlReference": "PCI-DSS Req 10.1, 10.2, 10.3",
+      "description": "Audit logs for all CDE system components must be enabled, collected, and retained.",
+      "controlType": "MultiCheck",
+      "checks": [
+        {"controlId": "LOG_KV_DIAGNOSTICS", "targetScope": "KeyVaultsForCHD"},
+        {"controlId": "LOG_NSG_FLOWLOGS", "targetScope": "NSGsForCDE"},
+        {"controlId": "LOG_ACTIVITY_LOG_RETENTION"}
+      ]
+    },
+    {
+      "id": "GDPR_DATA_ENCRYPTION_AT_REST",
+      "category": "Regulatory_GDPR",
+      "description": "Ensure encryption of personal data at rest (e.g., on storage accounts).",
+      "controlType": "StorageAccountProperties",
+      "targetScope": "AllStorageAccounts",
+      "expectedConfiguration": {
+        "encryption": {
+          "services": {
+            "blob": {"enabled": true},
+            "file": {"enabled": true}
+          }
+        }
+      },
+      "remediationSuggestion": "Enable encryption for blob and file services on all relevant storage accounts. Consider using Customer-Managed Keys (CMK) for enhanced control."
+    },
+    {
+      "id": "GDPR_LOG_ACCESS_SENSITIVE_DATA_KV",
+      "category": "Regulatory_GDPR",
+      "description": "Ensure audit logs are enabled for Key Vaults that might store secrets related to personal data processing systems.",
+      "controlType": "DiagnosticSettings",
+      "targetScope": "AllKeyVaults",
+      "targetResourceType": "Microsoft.KeyVault/vaults",
+      "requiredLogs": ["AuditEvent"],
+      "minRetentionDays": 365,
+      "remediationSuggestion": "Enable AuditEvent diagnostic logs for Key Vaults, sending them to a Log Analytics workspace or Storage Account with a retention of at least 365 days."
+    },
+    {
+      "id": "SWIFT_CSP_RESTRICT_INTERNET_ACCESS_NSG",
+      "category": "Regulatory_SWIFT-CSP",
+      "controlReference": "SWIFT-CSP 1.1",
+      "description": "Restrict internet access to/from SWIFT-related systems by ensuring no NSG rules allow 'Internet' as source or destination.",
+      "controlType": "NSGRuleCheck",
+      "targetScope": "ResourceGroup:swift-rg",
+      "ruleCriteria": {
+        "access": "Allow",
+        "direction": "Any",
+        "sourceAddressPrefixes": ["Internet", "Any", "0.0.0.0/0", "::/0"],
+        "destinationAddressPrefixes": ["Internet", "Any", "0.0.0.0/0", "::/0"]
+      },
+      "expectedResult": "NotExistsOrScoped",
+      "remediationSuggestion": "Review NSG rules for SWIFT-related systems (e.g., in resource group 'swift-rg'). Remove or tightly scope any rules that allow 'Internet' as a source or destination, unless explicitly justified and documented."
+    },
+    {
+      "id": "SWIFT_CSP_MFA_ADMIN_ACCESS",
+      "category": "Regulatory_SWIFT-CSP",
+      "controlReference": "SWIFT-CSP 2.2A",
+      "description": "Verify MFA is enforced for admin access to the Azure management plane (conceptual check via ASC).",
+      "controlType": "AzureSecurityCenterRecommendation",
+      "targetScope": "Subscription",
+      "expectedConfiguration": {
+        "recommendationName": "MFA should be enabled on accounts with owner permissions on your subscription",
+        "expectedStatus": "Healthy"
+      },
+      "remediationSuggestion": "Ensure MFA is enforced for all admin accounts via Azure AD Conditional Access policies. Monitor related recommendations in Azure Security Center."
+    }
+  ]
+}
