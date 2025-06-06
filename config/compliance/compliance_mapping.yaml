@@ -1,0 +1,99 @@
+# Compliance Mapping File
+#
+# Purpose:
+# This file provides a centralized mechanism to map high-level compliance framework
+# requirements (e.g., from PCI-DSS, NIST CSF, SWIFT CSP, internal policies) to
+# specific, actionable technical controls defined in 'critical_controls.json'
+# and/or specific configuration rules in 'network_requirements.json'.
+#
+# Benefits:
+# - Traceability: Clearly shows how technical checks contribute to meeting broader
+#   compliance objectives.
+# - Audit Support: Can simplify providing evidence to auditors by linking technical
+#   findings back to specific framework requirements.
+# - Impact Analysis: Helps understand which compliance requirements might be affected
+#   by a failing technical control.
+# - Reporting: Enables more sophisticated compliance reporting that can aggregate
+#   findings by framework requirement.
+#
+# Structure (Framework-centric):
+# The primary structure is a list of 'mappings'. Each mapping entry links a single
+# requirement from a specific compliance framework to one or more technical
+# controls or configuration rules.
+
+# Root element
+# complianceFrameworkMappings:
+#   - framework:
+#       name: "Name of the Compliance Framework (e.g., PCI-DSS_v4.0, NIST_CSF_v1.1)"
+#       version: "Version of the framework (e.g., 4.0, 1.1)" # Optional, can be part of name
+#     requirement:
+#       id: "Requirement_Identifier (e.g., 1.2.1, PR.AC-1, CP-2)"
+#       description: "A concise description of the framework requirement."
+#       # Optional: For very long descriptions or if full text is managed elsewhere
+#       # detailsFile: "path/to/framework_requirement_details.md"
+#       # detailsPointer: "#section-1.2.1" # Pointer within the detailsFile
+#     linkedResources:
+#       # Links to technical controls defined in 'critical_controls.json'
+#       criticalControlIds:
+#         - "ID_OF_CRITICAL_CONTROL_1" # e.g., "NET_NSG_SUBNET_ATTACHMENT"
+#         - "ID_OF_CRITICAL_CONTROL_2" # e.g., "ENC_KV_SOFT_DELETE"
+#       # Links to specific configurations defined in 'network_requirements.json'
+#       # This could reference subnetNamePatterns or even more specific parts if needed.
+#       networkRequirementPatterns:
+#         - subnetNamePattern: "pci-zone-*" # Identifies relevant subnet group in network_requirements.json
+#           # Optional: further specify which part of the network_requirement for that pattern applies
+#           # e.g., appliesToProhibitedPorts: ["Tcp:21"]
+#           # e.g., appliesToAllowedInbound: "Allow HTTPS from LB" (name of the allowed rule)
+#         - generalRequirement: "defaultDenyAllInbound" # Link to a general network requirement
+#       # Links to other external policy documents or specific checks (conceptual)
+#       # otherReferences:
+#       #   - type: "AzurePolicy"
+#       #     id: "/providers/Microsoft.Authorization/policyDefinitions/xxxx"
+#       #     description: "Ensure MFA is enabled for all subscription owners."
+
+# --- Example Mappings ---
+
+# Example 1: PCI-DSS Requirement for Network Segmentation
+# - framework:
+#     name: "PCI-DSS_v4.0"
+#   requirement:
+#     id: "1.2.1.a" # Hypothetical ID structure
+#     description: "Network segmentation is implemented and maintained to isolate the CDE from out-of-scope systems."
+#   linkedResources:
+#     criticalControlIds:
+#       - "NET_NSG_SUBNET_ATTACHMENT"     # Ensures subnets have NSGs
+#       - "NET_NSG_DEFAULT_DENY"          # Ensures NSGs have a default deny
+#       - "PCI_NET_SEGMENTATION_CDE"      # This is a control that might use network_requirements.json
+#     networkRequirementPatterns:
+#       - subnetNamePattern: "pci-cde-subnet-*" # From network_requirements.json
+#         # This implies all rules (prohibitedPorts, allowedInbound/Outbound) for this pattern are relevant.
+#       - subnetNamePattern: "shared-services-subnet-*" # Also relevant for CDE isolation
+#         # Could add more specificity here if needed, e.g., which part of the shared-services requirements.
+
+# Example 2: NIST CSF Requirement for Data-at-Rest Encryption
+# - framework:
+#     name: "NIST_CSF_v1.1"
+#   requirement:
+#     id: "PR.DS-1" # Data-at-rest is protected.
+#     description: "Data-at-rest is protected through mechanisms such as encryption."
+#   linkedResources:
+#     criticalControlIds:
+#       - "ENC_KV_SKU_PREMIUM"            # For HSM-backed keys
+#       - "ENC_KV_KEY_EXPIRATION"         # Key lifecycle management
+#       - "ENC_STORAGE_ENCRYPTION_CMK"    # Storage using CMK
+#       # Could also include controls for database encryption, disk encryption etc.
+#     # No direct networkRequirementPatterns here, but some controls might internally reference them.
+
+# Example 3: Internal Policy for Key Vault Logging
+# - framework:
+#     name: "INTERNAL_SECURITY_POLICY_v2.3"
+#   requirement:
+#     id: "LOG-005.KV"
+#     description: "All Key Vault activities, especially those related to key access and management, must be logged and retained."
+#   linkedResources:
+#     criticalControlIds:
+#       - "LOG_KV_DIAGNOSTICS"
+#     # networkRequirementPatterns might not be directly relevant here,
+#     # unless specific network configurations are mandated for log ingestion endpoints.
+
+# End of file

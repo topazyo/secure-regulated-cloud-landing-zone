@@ -208,6 +208,62 @@
         {"controlId": "LOG_NSG_FLOWLOGS", "targetScope": "NSGsForCDE"},
         {"controlId": "LOG_ACTIVITY_LOG_RETENTION"}
       ]
+    },
+    {
+      "id": "GDPR_DATA_ENCRYPTION_AT_REST",
+      "category": "Regulatory_GDPR",
+      "description": "Ensure encryption of personal data at rest (e.g., on storage accounts).",
+      "controlType": "StorageAccountProperties",
+      "targetScope": "AllStorageAccounts",
+      "expectedConfiguration": {
+        "encryption": {
+          "services": {
+            "blob": {"enabled": true},
+            "file": {"enabled": true}
+          }
+        }
+      },
+      "remediationSuggestion": "Enable encryption for blob and file services on all relevant storage accounts. Consider using Customer-Managed Keys (CMK) for enhanced control."
+    },
+    {
+      "id": "GDPR_LOG_ACCESS_SENSITIVE_DATA_KV",
+      "category": "Regulatory_GDPR",
+      "description": "Ensure audit logs are enabled for Key Vaults that might store secrets related to personal data processing systems.",
+      "controlType": "DiagnosticSettings",
+      "targetScope": "AllKeyVaults",
+      "targetResourceType": "Microsoft.KeyVault/vaults",
+      "requiredLogs": ["AuditEvent"],
+      "minRetentionDays": 365,
+      "remediationSuggestion": "Enable AuditEvent diagnostic logs for Key Vaults, sending them to a Log Analytics workspace or Storage Account with a retention of at least 365 days."
+    },
+    {
+      "id": "SWIFT_CSP_RESTRICT_INTERNET_ACCESS_NSG",
+      "category": "Regulatory_SWIFT-CSP",
+      "controlReference": "SWIFT-CSP 1.1",
+      "description": "Restrict internet access to/from SWIFT-related systems by ensuring no NSG rules allow 'Internet' as source or destination.",
+      "controlType": "NSGRuleCheck",
+      "targetScope": "ResourceGroup:swift-rg",
+      "ruleCriteria": {
+        "access": "Allow",
+        "direction": "Any",
+        "sourceAddressPrefixes": ["Internet", "Any", "0.0.0.0/0", "::/0"],
+        "destinationAddressPrefixes": ["Internet", "Any", "0.0.0.0/0", "::/0"]
+      },
+      "expectedResult": "NotExistsOrScoped",
+      "remediationSuggestion": "Review NSG rules for SWIFT-related systems (e.g., in resource group 'swift-rg'). Remove or tightly scope any rules that allow 'Internet' as a source or destination, unless explicitly justified and documented."
+    },
+    {
+      "id": "SWIFT_CSP_MFA_ADMIN_ACCESS",
+      "category": "Regulatory_SWIFT-CSP",
+      "controlReference": "SWIFT-CSP 2.2A",
+      "description": "Verify MFA is enforced for admin access to the Azure management plane (conceptual check via ASC).",
+      "controlType": "AzureSecurityCenterRecommendation",
+      "targetScope": "Subscription",
+      "expectedConfiguration": {
+        "recommendationName": "MFA should be enabled on accounts with owner permissions on your subscription",
+        "expectedStatus": "Healthy"
+      },
+      "remediationSuggestion": "Ensure MFA is enforced for all admin accounts via Azure AD Conditional Access policies. Monitor related recommendations in Azure Security Center."
     }
   ]
 }

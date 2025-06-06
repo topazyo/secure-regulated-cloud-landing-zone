@@ -1,0 +1,229 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Critical Azure Compliance Controls",
+  "description": "A schema for defining critical Azure compliance controls to be verified.",
+  "type": "object",
+  "properties": {
+    "criticalControls": {
+      "type": "array",
+      "description": "A list of critical control definitions.",
+      "items": {
+        "$ref": "#/definitions/controlItem"
+      }
+    }
+  },
+  "required": [
+    "criticalControls"
+  ],
+  "definitions": {
+    "controlItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "A unique identifier for the control."
+        },
+        "category": {
+          "type": "string",
+          "description": "The compliance category this control belongs to.",
+          "enum": [
+            "NetworkSecurity",
+            "Encryption",
+            "IdentityAndAccess",
+            "LoggingAndMonitoring",
+            "Regulatory_PCI-DSS",
+            "Regulatory_GDPR",
+            "Regulatory_SWIFT-CSP"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "description": "A human-readable description of the control's purpose."
+        },
+        "controlType": {
+          "type": "string",
+          "description": "The type of check to be performed for this control.",
+          "enum": [
+            "NSGConfig",
+            "NSGRuleCheck",
+            "SubnetConfig",
+            "KeyVaultProperties",
+            "KeyVaultKeyProperties",
+            "StorageAccountProperties",
+            "RBACCheck",
+            "CustomRoleCheck",
+            "DiagnosticSettings",
+            "NSGFlowLogs",
+            "ActivityLogAlerts",
+            "LogAnalyticsWorkspace",
+            "SentinelCheck",
+            "SubnetCompliance",
+            "MultiCheck",
+            "AzureSecurityCenterRecommendation" # Hypothetical new type for SWIFT MFA example
+          ]
+        },
+        "targetScope": {
+          "type": "string",
+          "description": "Defines the scope of resources this control applies to (e.g., 'Subscription', 'AllKeyVaults', 'ResourceGroup:myRg', 'SpecificResource:myKvName')."
+        },
+        "targetResourceType": {
+          "type": "string",
+          "description": "The Azure resource type this control targets, used by some controlTypes like DiagnosticSettings (e.g., 'Microsoft.KeyVault/vaults')."
+        },
+        "expectedConfiguration": {
+          "type": "object",
+          "description": "An object describing the expected configuration parameters for the control. Structure varies by controlType."
+        },
+        "ruleCriteria": {
+          "type": "object",
+          "description": "Criteria used by rule-based checks like NSGRuleCheck."
+        },
+        "expectedResult": {
+          "type": "string",
+          "description": "Used by some checks to specify an expected outcome, e.g., 'NotExists'."
+        },
+        "roleDefinitionId": {
+          "type": "string",
+          "description": "Azure Role Definition ID (GUID) used by RBACCheck."
+        },
+        "maxAssignments": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of allowed assignments for RBACCheck."
+        },
+        "prohibitedPermissions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of permissions (e.g., '*/write') that should not exist in CustomRoleCheck."
+        },
+        "requiredLogs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required log categories for DiagnosticSettings."
+        },
+        "requiredMetrics": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required metric categories for DiagnosticSettings."
+        },
+        "minRetentionDays": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum retention days for DiagnosticSettings or Log Analytics."
+        },
+        "checks": {
+          "type": "array",
+          "description": "For controlType 'MultiCheck', an array of sub-checks to perform.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "controlId": {"type": "string"},
+              "targetScope": {"type": "string"}
+            },
+            "required": ["controlId"]
+          }
+        },
+        "controlReference": {
+            "type": "string",
+            "description": "Reference to external compliance standard (e.g. PCI-DSS Req X.Y)"
+        },
+        "targetScopePatterns": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Array of patterns for matching target scopes, used by SubnetCompliance."
+        },
+        "complianceProfile": {
+            "type": "string",
+            "description": "Identifier for a compliance profile (e.g. in network_requirements.json), used by SubnetCompliance."
+        },
+        "remediationSuggestion": {
+          "type": "string",
+          "description": "A suggested action to take if the control is found to be non-compliant."
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "description",
+        "controlType",
+        "targetScope"
+      ],
+      "allOf": [
+        {
+          "if": { "properties": { "controlType": { "const": "KeyVaultProperties" } } },
+          "then": {
+            "properties": {
+              "expectedConfiguration": {
+                "type": "object",
+                "properties": {
+                  "sku": { "type": "string", "enum": ["standard", "premium", "Standard", "Premium"] },
+                  "enableSoftDelete": { "type": "boolean" },
+                  "enablePurgeProtection": { "type": "boolean" }
+                },
+                "additionalProperties": false
+                # Can be oneOf these properties, not necessarily all required in one expectedConfig.
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "controlType": { "const": "RBACCheck" } } },
+          "then": {
+            "required": ["roleDefinitionId", "maxAssignments"]
+            # expectedConfiguration is not typically used for this type, direct properties are used
+          }
+        },
+        {
+          "if": { "properties": { "controlType": { "const": "DiagnosticSettings" } } },
+          "then": {
+            "required": ["targetResourceType"],
+            "properties": {
+              "expectedConfiguration": {
+                "description": "Although DiagnosticSettings has top-level fields like requiredLogs, this could be used for future generic aspects.",
+                "type": "object"
+              }
+            }
+            # requiredLogs, requiredMetrics, minRetentionDays are top-level for this type
+          }
+        },
+        {
+            "if": { "properties": { "controlType": { "const": "NSGRuleCheck" } } },
+            "then": {
+                "required": ["ruleCriteria", "expectedResult"]
+            }
+        },
+        {
+            "if": { "properties": { "controlType": { "const": "CustomRoleCheck" } } },
+            "then": {
+                "required": ["prohibitedPermissions"]
+            }
+        },
+        {
+            "if": { "properties": { "controlType": { "const": "MultiCheck" } } },
+            "then": {
+                "required": ["checks"]
+            }
+        },
+        {
+          "if": { "properties": { "controlType": { "const": "AzureSecurityCenterRecommendation" } } },
+          "then": {
+            "properties": {
+              "expectedConfiguration": {
+                "type": "object",
+                "description": "Configuration for checking an Azure Security Center recommendation.",
+                "properties": {
+                  "recommendationName": { "type": "string", "description": "The name or a unique part of the ASC recommendation display name." },
+                  "expectedStatus": { "type": "string", "enum": ["Healthy", "Unhealthy", "NotApplicable"], "description": "The expected status of the recommendation." }
+                },
+                "required": ["recommendationName", "expectedStatus"],
+                "additionalProperties": true # Allow for other potential criteria
+              }
+            }
+          }
+        }
+        # Add more if/then/else blocks for other controlTypes
+        # to specify their 'expectedConfiguration' or other required root-level properties.
+      ]
+    }
+  }
+}

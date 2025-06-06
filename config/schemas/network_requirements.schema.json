@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Network Compliance Requirements",
+  "description": "Defines network compliance rules, including general requirements and subnet-specific policies.",
+  "type": "object",
+  "properties": {
+    "generalNetworkRequirements": {
+      "type": "object",
+      "description": "General network security requirements applicable across the environment.",
+      "properties": {
+        "defaultDenyAllInbound": {
+          "type": "boolean",
+          "description": "If true, all NSGs should ideally have a default deny-all rule for inbound traffic."
+        },
+        "defaultDenyAllOutbound": {
+          "type": "boolean",
+          "description": "If true, all NSGs should ideally have a default deny-all rule for outbound traffic."
+        },
+        "globalProhibitedSources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "A list of source IP addresses or service tags that are globally prohibited for inbound traffic (e.g., known malicious IPs)."
+        },
+        "globalProhibitedPorts": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/portProtocolEntry" },
+          "description": "A list of ports/protocols globally prohibited (e.g., 'Tcp:23' for Telnet)."
+        },
+        "requiredDDoSProtectionTier": {
+          "type": "string",
+          "enum": ["Standard", "Basic", "None"],
+          "description": "Specifies the minimum required DDoS protection tier for VNets."
+        },
+        "requireFlowLogsForAllNSGs": {
+          "type": "boolean",
+          "description": "If true, all NSGs must have Flow Logs enabled."
+        },
+        "flowLogRetentionDays": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum retention period in days for NSG Flow Logs if requireFlowLogsForAllNSGs is true."
+        }
+      },
+      "additionalProperties": false
+    },
+    "subnetSpecificRequirements": {
+      "type": "array",
+      "description": "An array of requirement objects, each targeting subnets matching a name pattern.",
+      "items": {
+        "$ref": "#/definitions/subnetRequirement"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "portProtocolEntry": {
+      "type": "string",
+      "description": "A string defining a protocol and port/range. Examples: 'Tcp:80', 'Udp:500-510', '*:*', 'Any:123', 'Icmp:any'."
+    },
+    "trafficRule": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "A descriptive name for this allowed traffic rule requirement."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional further details about the purpose of this rule."
+        },
+        "protocol": {
+          "type": "string",
+          "description": "Protocol (e.g., Tcp, Udp, Icmp, *)."
+        },
+        "ports": {
+          "type": "array",
+          "description": "Array of port definitions that must be allowed. Each item uses the portProtocolEntry format, but the protocol part might be redundant if 'protocol' field is also used. For simplicity, this can be just port numbers/ranges/wildcards, and 'protocol' field at this level applies.",
+          "items": { "type": "string" } # e.g., "443", "80", "1024-4000", "*"
+        },
+        "sourcePrefixes": {
+          "type": "array",
+          "description": "For inbound traffic: list of allowed source IP CIDRs or service tags.",
+          "items": { "type": "string" }
+        },
+        "destinationPrefixes": {
+          "type": "array",
+          "description": "For outbound traffic: list of allowed destination IP CIDRs or service tags.",
+          "items": { "type": "string" }
+        }
+      },
+      "required": [
+        "name",
+        "protocol",
+        "ports"
+        // sourcePrefixes is required for inbound, destinationPrefixes for outbound. This can be made conditional if schema draft supports it well, or handled by documentation.
+      ],
+      "additionalProperties": false
+      # Could use oneOf here if sourcePrefixes vs destinationPrefixes is mutually exclusive based on rule type (inbound/outbound)
+    },
+    "subnetRequirement": {
+      "type": "object",
+      "properties": {
+        "subnetNamePattern": {
+          "type": "string",
+          "description": "A glob pattern to match subnet names (e.g., 'pci-zone-*', 'frontend-subnet')."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional description for this set of subnet requirements."
+        },
+        "prohibitedInboundSources": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of source IP CIDRs or service tags explicitly prohibited from accessing this subnet."
+        },
+        "prohibitedOutboundDestinations": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of destination IP CIDRs or service tags explicitly prohibited for outbound traffic from this subnet."
+        },
+        "prohibitedPorts": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/portProtocolEntry" },
+          "description": "List of ports/protocols that should be prohibited for traffic to/from this subnet."
+        },
+        "allowedInboundTraffic": {
+          "type": "array",
+          "description": "Defines specific traffic that MUST be allowed inbound to the subnet.",
+          "items": { "$ref": "#/definitions/trafficRule" }
+        },
+        "allowedOutboundTraffic": {
+          "type": "array",
+          "description": "Defines specific traffic that MUST be allowed outbound from the subnet.",
+          "items": { "$ref": "#/definitions/trafficRule" }
+        },
+        "enforcedNSGPolicy": {
+          "type": "string",
+          "description": "Name or ID of an Azure Policy that should be assigned to NSGs associated with these subnets."
+        },
+        "requireRouteTable": {
+          "type": "boolean",
+          "description": "If true, subnets matching this pattern must have a Route Table associated."
+        },
+        "disablePublicIpOnVMs": {
+          "type": "boolean",
+          "description": "If true, VMs in these subnets should not have public IP addresses."
+        }
+      },
+      "required": [
+        "subnetNamePattern"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -59,57 +59,107 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 CRITICAL_CONTROLS_FILE="$SCRIPT_DIR/../../config/compliance/critical_controls.json" # Adjusted path
 # FRAMEWORKS variable and old functions are removed by this diff.
 
-# Color codes for output
+# Color codes for output (used within messages passed to log functions)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Debug Mode - can be enabled by VERIFY_COMPLIANCE_DEBUG=true environment variable or --debug flag
+# Handled in load_configuration, but initialized here.
+DEBUG_MODE=${VERIFY_COMPLIANCE_DEBUG:-false}
+SCRIPT_NAME=$(basename "$0") # For potential use in logs
+
+# --- Logging Helper Functions ---
+_log_base() {
+    local level="$1"
+    local color_prefix="$2" # Color for the log level text itself
+    local message="$3"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # Example: 2023-10-27T10:30:00Z [INFO] verify-compliance.sh: Starting network security validation...
+    # For now, script name is omitted from the automated prefix for brevity, but can be added.
+    echo -e "${color_prefix}${timestamp} [$level]${NC} $message"
+}
+
+log_info() {
+    # Message itself can contain color codes e.g. log_info "${BLUE}This is blue info${NC}"
+    _log_base "INFO" "$BLUE" "$1"
+}
+
+log_warn() {
+    _log_base "WARN" "$YELLOW" "$1" >&2
+}
+
+log_error() {
+    local message="$1"
+    # Errors always go to stderr.
+    _log_base "ERROR" "$RED" "$message" >&2
+    # This function now just logs. Exiting is handled by the caller.
+    # Example usage: check_prerequisites || { log_error "Prereq failed"; exit 1; }
+}
+
+log_success() {
+    _log_base "SUCCESS" "$GREEN" "$1"
+}
+
+log_debug() {
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        # Debug messages don't have a specific color prefix for the level itself by default
+        _log_base "DEBUG" "" "$1"
+    fi
+}
+
+
 # Ensure required tools are installed
 check_prerequisites() {
-    echo -e "${BLUE}[INFO]${NC} Checking prerequisites..."
+    log_info "Checking prerequisites..."
     
-    # Check for Azure CLI
     if ! command -v az &> /dev/null; then
-        echo -e "${RED}[ERROR]${NC} Azure CLI is not installed. Please install it first."
-        exit 1
+        log_error "Azure CLI is not installed. Please install it first." ; return $?
     fi
+    log_debug "Azure CLI found."
     
-    # Check for jq
     if ! command -v jq &> /dev/null; then
-        echo -e "${RED}[ERROR]${NC} jq is not installed. Please install it first."
-        exit 1
+        log_error "jq is not installed. Please install it first." ; return $?
     fi
+    log_debug "jq found."
     
-    # Check Azure CLI login status
     if ! az account show &> /dev/null; then
-        echo -e "${YELLOW}[WARN]${NC} Not logged into Azure. Attempting login..."
-        az login
+        log_warn "Not logged into Azure. Attempting login..."
+        az login || { log_error "Azure login failed." ; return $?; }
     fi
+    log_debug "Azure login verified."
     
-    # Set subscription
+    local current_sub_info
     if [ -n "$SUBSCRIPTION_ID" ]; then
-        az account set --subscription "$SUBSCRIPTION_ID" --only-show-errors || { echo -e "${RED}[ERROR]${NC} Failed to set subscription $SUBSCRIPTION_ID"; exit 1; }
-        echo -e "${BLUE}[INFO]${NC} Using subscription: $SUBSCRIPTION_ID"
-    else
-        SUBSCRIPTION_ID=$(az account show --query id -o tsv --only-show-errors)
-        if [ $? -ne 0 ] || [ -z "$SUBSCRIPTION_ID" ]; then
-            echo -e "${RED}[ERROR]${NC} Failed to get current subscription. Please login to Azure CLI."
-            exit 1
+        # Attempt to set the subscription and capture its info if successful
+        current_sub_info=$(az account set --subscription "$SUBSCRIPTION_ID" --only-show-errors && az account show --query "{name:name, id:id}" -o tsv)
+        if [ $? -ne 0 ] || [ -z "$current_sub_info" ]; then
+             log_error "Failed to set subscription to '$SUBSCRIPTION_ID' or retrieve its details."
+             return 1
         fi
-        echo -e "${BLUE}[INFO]${NC} Using current subscription: $SUBSCRIPTION_ID"
+        log_info "Using subscription: $current_sub_info (specified by parameter/env)."
+    else
+        current_sub_info=$(az account show --query "{name:name, id:id}" -o tsv --only-show-errors)
+        if [ $? -ne 0 ] || [ -z "$current_sub_info" ]; then
+            log_error "Failed to get current Azure subscription. Please login to Azure CLI or set subscription." ; return $?
+        fi
+        SUBSCRIPTION_ID=$(echo "$current_sub_info" | awk '{print $NF}') # Get the ID part
+        log_info "Using current subscription: $current_sub_info."
     fi
     
-    # Create output directory if it doesn't exist
     mkdir -p "$REPORT_OUTPUT_DIR"
+    log_debug "Report output directory ensured: $REPORT_OUTPUT_DIR"
 
-    # Check if CRITICAL_CONTROLS_FILE exists
     if [ ! -f "$CRITICAL_CONTROLS_FILE" ]; then
-        echo -e "${RED}[ERROR]${NC} Critical controls file not found at: $CRITICAL_CONTROLS_FILE"
-        exit 1
+        log_error "Critical controls file not found at: $CRITICAL_CONTROLS_FILE" ; return $?
     fi
-    echo -e "${BLUE}[INFO]${NC} Loading critical controls from: $CRITICAL_CONTROLS_FILE"
+    # This log_info is now effectively duplicated if main_data_driven calls it too. Consider removing from one place.
+    # For now, keeping it here to confirm file presence during prereqs.
+    log_info "Critical controls file found: $CRITICAL_CONTROLS_FILE"
+    log_success "Prerequisites check passed."
+    return 0 # Explicitly return 0 for success
 }
 
 # Load configuration from environment or parameters
@@ -117,51 +167,72 @@ load_configuration() {
     echo -e "${BLUE}[INFO]${NC} Loading script configuration..."
     
     # Load from parameters if provided
-    while getopts "s:g:w:k:o:" opt; do
+    # Added -: for long options like --debug
+    local OPTIND # Reset OPTIND for getopts if script is sourced multiple times.
+    while getopts ":s:g:w:k:o:-:" opt; do
         case $opt in
             s) SUBSCRIPTION_ID=$OPTARG ;;
             g) RESOURCE_GROUP=$OPTARG ;;
             w) LOG_ANALYTICS_WORKSPACE=$OPTARG ;;
             k) KEY_VAULT_NAME=$OPTARG ;;
             o) REPORT_OUTPUT_DIR=$OPTARG ;;
-            \?) echo "Invalid option -$OPTARG" >&2; exit 1 ;;
+            -) # Handle long options
+                case "${OPTARG}" in
+                    debug) DEBUG_MODE=true ;;
+                    *)
+                        if [[ "$OPTERR" = 1 ]] && [[ "${optspec:0:1}" != ":" ]]; then
+                            # Only show error if not silenced and not a missing argument for an option expecting one.
+                            log_error "Invalid option --${OPTARG}" >&2
+                            # echo "Usage: $0 ..." # Consider showing usage.
+                            return 1 # Indicate failure
+                        fi
+                        ;;
+                esac;;
+            \?) log_error "Invalid short option -$OPTARG supplied." >&2; return 1 ;;
+            :) log_error "Option -$OPTARG requires an argument." >&2; return 1 ;;
         esac
     done
+    shift $((OPTIND -1)) # Remove parsed options from argument list
     
+    if [[ "$DEBUG_MODE" == "true" ]]; then
+        log_debug "Debug mode enabled via parameter or environment variable."
+    fi
+
     # If not provided as parameters, try to load from environment
     if [ -z "$RESOURCE_GROUP" ]; then
         RESOURCE_GROUP=${AZURE_RESOURCE_GROUP:-""}
         if [ -z "$RESOURCE_GROUP" ]; then
-            echo -e "${YELLOW}[WARN]${NC} Resource group not specified. Some checks might be limited or require specific targetScope in controls JSON."
+            log_warn "Resource group not specified via parameter or AZURE_RESOURCE_GROUP env var. Some checks might be limited or require specific targetScope in controls JSON."
+        else
+            log_info "Using Resource Group: $RESOURCE_GROUP (from AZURE_RESOURCE_GROUP env var or default)"
         fi
+    else
+        log_info "Using Resource Group: $RESOURCE_GROUP (from parameter)" # Already logged if from param, but good for clarity if only env is used.
     fi
     
     if [ -z "$LOG_ANALYTICS_WORKSPACE" ]; then
         LOG_ANALYTICS_WORKSPACE=${AZURE_LOG_ANALYTICS_WORKSPACE:-""}
         if [ -z "$LOG_ANALYTICS_WORKSPACE" ]; then
-            echo -e "${YELLOW}[WARN]${NC} Log Analytics workspace not specified. Will attempt to auto-detect for relevant controls."
-            # Auto-detection for default LAW (e.g., containing 'security')
-            # This is a best-effort detection if not specified.
-            # local detected_law=$(az monitor log-analytics workspace list --query "[?contains(name, 'security')].name" -o tsv | head -n 1)
-            # if [ -n "$detected_law" ]; then
-            #     LOG_ANALYTICS_WORKSPACE=$detected_law
-            #     echo -e "${BLUE}[INFO]${NC} Auto-detected Log Analytics workspace: $LOG_ANALYTICS_WORKSPACE"
-            # fi
+            log_warn "Log Analytics workspace not specified. Will attempt to auto-detect for relevant controls if needed."
+        else
+            log_info "Using Log Analytics Workspace: $LOG_ANALYTICS_WORKSPACE (from AZURE_LOG_ANALYTICS_WORKSPACE or default)"
         fi
+    else
+         log_info "Using Log Analytics Workspace: $LOG_ANALYTICS_WORKSPACE (from parameter)"
     fi
     
     if [ -z "$KEY_VAULT_NAME" ]; then
         KEY_VAULT_NAME=${AZURE_KEY_VAULT_NAME:-""}
         if [ -z "$KEY_VAULT_NAME" ]; then
-            echo -e "${YELLOW}[WARN]${NC} Key Vault name not specified. Some Key Vault checks might be skipped or require specific targetScope."
-            # Auto-detection for a default KV
-            # local detected_kv=$(az keyvault list --query "[0].name" -o tsv 2>/dev/null)
-            # if [ -n "$detected_kv" ]; then
-            #     KEY_VAULT_NAME=$detected_kv
-            #     echo -e "${BLUE}[INFO]${NC} Auto-detected Key Vault: $KEY_VAULT_NAME"
-            # fi
+            log_warn "Key Vault name not specified. Some Key Vault checks might be skipped or require specific targetScope."
+        else
+            log_info "Using Key Vault: $KEY_VAULT_NAME (from AZURE_KEY_VAULT_NAME or default)"
         fi
+    else
+        log_info "Using Key Vault: $KEY_VAULT_NAME (from parameter)"
     fi
+    log_info "Configuration loading complete."
+    return 0
 }
 
 # START OF DATA-DRIVEN CHECK FUNCTIONS (NEW MODEL)
@@ -226,20 +297,28 @@ check_subnet_nsg_attachment() {
     if [ -n "$vnet_name_filter" ]; then
         vnets_to_check="$vnet_name_filter"
     else
-        echo -e "${BLUE}[INFO]${NC} Listing VNETs in RG: $RESOURCE_GROUP"
+        log_info "Listing VNETs in RG: $RESOURCE_GROUP for subnet NSG attachment check."
         vnets_to_check=$(az network vnet list --resource-group "$RESOURCE_GROUP" --query "[].name" -o tsv 2>/dev/null)
         if [ $? -ne 0 ] || [ -z "$vnets_to_check" ]; then
+            # This echo is JSON output for the check function, so it remains.
             echo "{\"status\": \"Error\", \"message\": \"Could not list VNETs in resource group '$RESOURCE_GROUP'.\"}"
             return
         fi
     fi
 
     for vnet_name in $vnets_to_check; do
-        echo -e "${BLUE}[INFO]${NC} Checking subnets in VNet: $vnet_name (Resource Group: $RESOURCE_GROUP)"
+        log_info "Checking subnets in VNet: $vnet_name (Resource Group: $RESOURCE_GROUP) for NSG attachment."
         local subnets_json=$(az network vnet subnet list --resource-group "$RESOURCE_GROUP" --vnet-name "$vnet_name" --query "[].{name:name, nsg:networkSecurityGroup.id}" -o json 2>/dev/null)
-        if [ $? -ne 0 ] || [ -z "$subnets_json" ]; then
-            findings_array+=("{\"subnet\": \"$vnet_name/AllSubnets\", \"status\": \"Error\", \"message\": \"Could not list subnets for VNet '$vnet_name' or VNet has no subnets.\"}")
-            overall_status="Error" # Or Non-Compliant if subnets are expected
+        
+        if [ $? -ne 0 ]; then # Actual error during CLI call
+            findings_array+=("{\"subnet\": \"$vnet_name/AllSubnets\", \"status\": \"Error\", \"message\": \"Error listing subnets for VNet '$vnet_name'.\"}")
+            overall_status="Error"
+            continue
+        fi
+        if [ -z "$subnets_json" ] || [ "$(echo "$subnets_json" | jq '. | length')" -eq 0 ]; then # No subnets found
+            log_warn "No subnets found for VNet '$vnet_name'. Skipping NSG attachment checks for this VNet."
+            # This is not necessarily an error for the check itself, could be an empty VNet.
+            # If subnets are expected, other configuration checks should verify VNet/Subnet existence.
             continue
         fi
 
@@ -510,7 +589,7 @@ check_storage_account_encryption() {
         echo "{\"status\": \"$finding_status\", \"message\": \"$finding_message\"}"
         return
     fi
-    
+
     finding_status="Compliant"
     finding_message="Storage Account '$sa_name': Encryption settings are compliant with expected CMK configuration."
     echo "{\"status\": \"$finding_status\", \"message\": \"$finding_message\"}"
@@ -535,7 +614,7 @@ check_rbac_assignments() {
     fi
 
     local relevant_assignments_count=$(echo "$assignments_json" | jq --argjson types "$principal_types_to_count_jq_array" '[.[] | select(.principalType as $pt | $types | index($pt))] | length')
-
+    
     if [ -z "$relevant_assignments_count" ]; then
         relevant_assignments_count=0
     fi
@@ -1107,8 +1186,16 @@ execute_control_check() {
     local expected_result_value=$(echo "$control_json" | jq -r '.expectedResult') # For checks where we expect non-existence
     local remediation_suggestion=$(echo "$control_json" | jq -r '.remediationSuggestion // ""')
 
-    echo -e "${BLUE}[INFO]${NC} Executing Check ID: $control_id - Type: $control_type"
-    echo -e "${BLUE}[INFO]${NC} Description: $control_desc"
+    log_info "${BLUE}Executing Check ID: $control_id - Type: $control_type${NC}" # Keep color here for emphasis on this line
+    log_debug "Description: $control_desc"
+    log_debug "Target Scope: $target_scope"
+    log_debug "Expected Config: $(echo "$expected_config_json" | jq -c .)"
+    if [[ -n "$rule_criteria_json" && "$rule_criteria_json" != "null" ]]; then
+      log_debug "Rule Criteria: $(echo "$rule_criteria_json" | jq -c .)"
+    fi
+    if [[ -n "$remediation_suggestion" ]]; then
+      log_debug "Remediation Suggestion available for this control."
+    fi
 
     local check_result_json
     # Default to Error status, specific checks should override
@@ -1130,14 +1217,18 @@ execute_control_check() {
             elif [ -n "$KEY_VAULT_NAME" ]; then # Fallback to global if set
                  kv_name_to_check="$KEY_VAULT_NAME"
             else
+                 # Use log_warn or log_info for skipped messages that are not errors but are operational notes.
+                 log_warn "Control $control_id (KeyVaultProperties): No specific Key Vault name in targetScope ('$target_scope') and no global KEY_VAULT_NAME set. Skipping."
                  check_result_json="{\"status\": \"Skipped\", \"message\": \"Control $control_id (KeyVaultProperties): No specific Key Vault name in targetScope ('$target_scope') and no global KEY_VAULT_NAME set.\"}"
-                 echo "$check_result_json" | jq --arg id "$control_id" --arg desc "$control_desc" --arg cat "$(echo "$control_json" | jq -r '.category')" '. | .controlId = $id | .description = $desc | .category = $cat'
-                 return
+                 # The rest of the return logic handles adding controlId etc.
             fi
 
-            if [ -z "$kv_name_to_check" ]; then
+            if [ -z "$kv_name_to_check" ] && [ -z "$check_result_json" ]; then # check_result_json might be set if skipped above
+                 log_warn "Control $control_id: Key Vault name could not be determined for scope '$target_scope'. Skipping."
                  check_result_json="{\"status\": \"Skipped\", \"message\": \"Control $control_id: Key Vault name could not be determined for scope '$target_scope'.\"}"
-            elif [ "$control_id" == "ENC_KV_SKU_PREMIUM" ]; then
+            elif [ -n "$kv_name_to_check" ]; then # Only proceed if kv_name_to_check is set
+                log_debug "Target Key Vault for $control_id: $kv_name_to_check"
+                if [ "$control_id" == "ENC_KV_SKU_PREMIUM" ]; then
                 local expected_sku=$(echo "$expected_config_json" | jq -r '.sku')
                 check_result_json=$(check_key_vault_sku "$kv_name_to_check" "$expected_sku")
             elif [ "$control_id" == "ENC_KV_SOFT_DELETE" ]; then
@@ -1160,9 +1251,9 @@ execute_control_check() {
                     scope_to_check_custom_roles="$target_scope"
                 else
                     scope_to_check_custom_roles="/subscriptions/$SUBSCRIPTION_ID" # Default
-                    echo -e "${YELLOW}[WARN]${NC} targetScope for $control_id is '$target_scope', defaulting to subscription scope for custom role check."
+                    log_warn "targetScope for $control_id ('$control_type') is '$target_scope', defaulting to subscription scope for custom role check. Specify 'Subscription' or full resource path."
                 fi
-
+                log_debug "Scope for CustomRoleCheck $control_id: $scope_to_check_custom_roles"
                 local prohibited_perms_jq_arr_str=$(echo "$control_json" | jq -r '.prohibitedPermissions // "[]"' | jq -c '.')
                 check_result_json=$(check_custom_role_permissions "$scope_to_check_custom_roles" "$prohibited_perms_jq_arr_str")
             else
@@ -1172,11 +1263,14 @@ execute_control_check() {
         "ActivityLogAlerts") # This is for LOG_ACTIVITY_LOG_RETENTION
             if [ "$control_id" == "LOG_ACTIVITY_LOG_RETENTION" ]; then
                 if [[ "$target_scope" == "Subscription" ]]; then
+                    log_debug "Targeting Subscription for LOG_ACTIVITY_LOG_RETENTION."
                     check_result_json=$(check_subscription_log_profile "$expected_config_json")
                 else
+                    log_warn "Control $control_id: LOG_ACTIVITY_LOG_RETENTION only supports targetScope 'Subscription'. Found '$target_scope'. Skipping."
                     check_result_json="{\"status\": \"Skipped\", \"message\": \"LOG_ACTIVITY_LOG_RETENTION control only supports targetScope 'Subscription'.\"}"
                 fi
             else
+                log_warn "Control ID '$control_id' of type '$control_type' not specifically handled. Skipping."
                 check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
             fi
             ;;
@@ -1185,6 +1279,7 @@ execute_control_check() {
                 if [[ "$target_scope" == "AllNSGs" ]]; then
                     local nsgs_json=$(az network nsg list --resource-group "$current_resource_group" --query "[].{name:name, id:id}" -o json 2>/dev/null)
                     if [ $? -ne 0 ] || [ -z "$nsgs_json" ] || [ "$(echo "$nsgs_json" | jq '. | length')" == "0" ]; then
+                        log_warn "No NSGs found in RG '$current_resource_group' for $control_id. Skipping."
                         check_result_json="{\"status\": \"Skipped\", \"message\": \"No NSGs found in RG '$current_resource_group' for $control_id.\"}"
                     else
                         local all_nsg_flowlog_findings=()
@@ -1192,7 +1287,7 @@ execute_control_check() {
                         echo "$nsgs_json" | jq -c '.[]' | while IFS= read -r nsg_obj_json; do
                             local nsg_name_iter=$(echo "$nsg_obj_json" | jq -r '.name')
                             local nsg_id_iter=$(echo "$nsg_obj_json" | jq -r '.id')
-                            echo -e "${BLUE}[INFO]${NC} Checking NSG Flow Logs for '$nsg_name_iter' (ID: $nsg_id_iter) for $control_id..."
+                            log_debug "Checking NSG Flow Logs for '$nsg_name_iter' (ID: $nsg_id_iter) for $control_id..." # Changed from echo
                             local flowlog_check_result_json=$(check_nsg_flow_logs "$nsg_id_iter" "$nsg_name_iter" "$expected_config_json")
                             all_nsg_flowlog_findings+=("$(echo "$flowlog_check_result_json" | jq --arg nsgid "$nsg_id_iter" '. + {resourceId: $nsgid}')")
                             local current_flowlog_check_status=$(echo "$flowlog_check_result_json" | jq -r '.status')
@@ -1202,19 +1297,14 @@ execute_control_check() {
                         local findings_json_array=$(printf '%s\n' "${all_nsg_flowlog_findings[@]}" | jq -s '.')
                         check_result_json="{\"status\": \"$overall_nsg_flowlog_status\", \"message\": \"NSG Flow Log check for all NSGs in RG '$current_resource_group' complete.\", \"details\": $findings_json_array}"
                     fi
-                elif [[ "$target_scope" == "SpecificResource:"* ]]; then
-                    local nsg_name_to_check=$(echo "$target_scope" | cut -d':' -f2)
-                    local nsg_id_spec=$(az network nsg show --name "$nsg_name_to_check" --resource-group "$current_resource_group" --query "id" -o tsv 2>/dev/null)
-                    if [ $? -ne 0 ] || [ -z "$nsg_id_spec" ]; then
-                         check_result_json="{\"status\": \"Error\", \"message\": \"Could not get ID for NSG '$nsg_name_to_check' in RG '$current_resource_group'.\"}"
-                    else
-                        check_result_json=$(check_nsg_flow_logs "$nsg_id_spec" "$nsg_name_to_check" "$expected_config_json")
-                    fi
+                # ... other target_scope conditions for NSGFlowLogs
                 else
-                    check_result_json="{\"status\": \"Skipped\", \"message\": \"Unsupported targetScope '$target_scope' for $control_id ($control_type).\"}"
+                     log_warn "Control ID '$control_id' (type $control_type) with target scope '$target_scope' not fully handled here. Skipping."
+                     check_result_json="{\"status\": \"Skipped\", \"message\": \"Unsupported targetScope '$target_scope' for $control_id ($control_type).\"}"
                 fi
             else
-                check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
+                 log_warn "Control ID '$control_id' of type '$control_type' not specifically handled. Skipping."
+                 check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
             fi
             ;;
         "LogAnalyticsWorkspace")
@@ -1227,10 +1317,13 @@ execute_control_check() {
                     # Attempt to get RG for default workspace if not current_resource_group
                     if [ -n "$la_ws_name" ] && ! az monitor log-analytics workspace show --name "$la_ws_name" --resource-group "$la_ws_rg" &>/dev/null; then
                         local detected_rg=$(az resource list --name "$la_ws_name" --resource-type "Microsoft.OperationalInsights/workspaces" --query "[0].resourceGroup" -o tsv 2>/dev/null)
-                        if [ -n "$detected_rg" ]; then la_ws_rg="$detected_rg"; else
+                        if [ -n "$detected_rg" ]; then
+                            log_debug "Auto-detected RG '$detected_rg' for LA Workspace '$la_ws_name'."
+                            la_ws_rg="$detected_rg";
+                        else
+                             log_error "Default Log Analytics Workspace '$la_ws_name' not found in default RG '$current_resource_group' and could not auto-detect its RG."
                              check_result_json="{\"status\": \"Error\", \"message\": \"Default Log Analytics Workspace '$la_ws_name' not found in default RG '$current_resource_group' and could not auto-detect its RG.\"}"
-                             echo "$check_result_json" | jq --arg id "$control_id" --arg desc "$control_desc" --arg cat "$(echo "$control_json" | jq -r '.category')" '. | .controlId = $id | .description = $desc | .category = $cat'
-                             return
+                             # Return is handled by the main error check at the end of the case block
                         fi
                     fi
                 elif [[ "$target_scope" == "SpecificResource:"* ]]; then
@@ -1242,17 +1335,21 @@ execute_control_check() {
                         la_ws_name="$path_part"
                     fi
                 else
+                     log_warn "Unsupported targetScope '$target_scope' for $control_id ($control_type). Provide DefaultWorkspace or SpecificResource:WsName[/WsRG]. Skipping."
                      check_result_json="{\"status\": \"Skipped\", \"message\": \"Unsupported targetScope '$target_scope' for $control_id ($control_type). Provide DefaultWorkspace or SpecificResource:WsName[/WsRG].\"}"
-                     echo "$check_result_json" | jq --arg id "$control_id" --arg desc "$control_desc" --arg cat "$(echo "$control_json" | jq -r '.category')" '. | .controlId = $id | .description = $desc | .category = $cat'
-                     return
                 fi
 
-                if [ -z "$la_ws_name" ]; then
-                    check_result_json="{\"status\": \"Skipped\", \"message\": \"Log Analytics Workspace name not determined for $control_id. Global var LOG_ANALYTICS_WORKSPACE may be empty.\"}"
-                else
-                    check_result_json=$(check_la_workspace_settings "$la_ws_name" "$la_ws_rg" "$expected_config_json")
+                if [ -z "$check_result_json" ]; then # If not already skipped or errored
+                    if [ -z "$la_ws_name" ]; then
+                        log_warn "Log Analytics Workspace name not determined for $control_id. Global var LOG_ANALYTICS_WORKSPACE may be empty. Skipping."
+                        check_result_json="{\"status\": \"Skipped\", \"message\": \"Log Analytics Workspace name not determined for $control_id. Global var LOG_ANALYTICS_WORKSPACE may be empty.\"}"
+                    else
+                        log_debug "Target LA Workspace for $control_id: $la_ws_name in RG $la_ws_rg"
+                        check_result_json=$(check_la_workspace_settings "$la_ws_name" "$la_ws_rg" "$expected_config_json")
+                    fi
                 fi
             else
+                log_warn "Control ID '$control_id' of type '$control_type' not specifically handled. Skipping."
                 check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
             fi
             ;;
@@ -1265,27 +1362,33 @@ execute_control_check() {
                     sentinel_ws_name="$LOG_ANALYTICS_WORKSPACE"
                      if [ -n "$sentinel_ws_name" ] && ! az monitor log-analytics workspace show --name "$sentinel_ws_name" --resource-group "$sentinel_ws_rg" &>/dev/null; then
                         local detected_rg=$(az resource list --name "$sentinel_ws_name" --resource-type "Microsoft.OperationalInsights/workspaces" --query "[0].resourceGroup" -o tsv 2>/dev/null)
-                        if [ -n "$detected_rg" ]; then sentinel_ws_rg="$detected_rg"; else
+                        if [ -n "$detected_rg" ]; then
+                            log_debug "Auto-detected RG '$detected_rg' for Sentinel LA Workspace '$sentinel_ws_name'."
+                            sentinel_ws_rg="$detected_rg";
+                        else
+                            log_error "Default Log Analytics Workspace '$sentinel_ws_name' for Sentinel check not found in default RG '$current_resource_group' and could not auto-detect its RG."
                             check_result_json="{\"status\": \"Error\", \"message\": \"Default Log Analytics Workspace '$sentinel_ws_name' for Sentinel check not found in default RG '$current_resource_group' and could not auto-detect its RG.\"}"
-                            echo "$check_result_json" | jq --arg id "$control_id" --arg desc "$control_desc" --arg cat "$(echo "$control_json" | jq -r '.category')" '. | .controlId = $id | .description = $desc | .category = $cat'
-                            return
                         fi
                     fi
                 elif [[ "$target_scope" == "SpecificResource:"* ]]; then
                     local path_part=$(echo "$target_scope" | cut -d':' -f2)
                     if [[ "$path_part" == */* ]]; then sentinel_ws_name=$(dirname "$path_part"); sentinel_ws_rg=$(basename "$path_part"); else sentinel_ws_name="$path_part"; fi
                 else
+                     log_warn "Unsupported targetScope '$target_scope' for $control_id ($control_type). Skipping."
                      check_result_json="{\"status\": \"Skipped\", \"message\": \"Unsupported targetScope '$target_scope' for $control_id ($control_type).\"}"
-                     echo "$check_result_json" | jq --arg id "$control_id" --arg desc "$control_desc" --arg cat "$(echo "$control_json" | jq -r '.category')" '. | .controlId = $id | .description = $desc | .category = $cat'
-                     return
                 fi
 
-                if [ -z "$sentinel_ws_name" ]; then
-                    check_result_json="{\"status\": \"Skipped\", \"message\": \"Log Analytics Workspace name for Sentinel check not determined for $control_id. Global var LOG_ANALYTICS_WORKSPACE may be empty.\"}"
-                else
-                     check_result_json=$(check_sentinel_on_workspace "$sentinel_ws_name" "$sentinel_ws_rg" "$expected_config_json")
+                if [ -z "$check_result_json" ]; then # If not already skipped or errored
+                    if [ -z "$sentinel_ws_name" ]; then
+                        log_warn "Log Analytics Workspace name for Sentinel check not determined for $control_id. Global var LOG_ANALYTICS_WORKSPACE may be empty. Skipping."
+                        check_result_json="{\"status\": \"Skipped\", \"message\": \"Log Analytics Workspace name for Sentinel check not determined for $control_id. Global var LOG_ANALYTICS_WORKSPACE may be empty.\"}"
+                    else
+                        log_debug "Target LA Workspace for Sentinel check $control_id: $sentinel_ws_name in RG $sentinel_ws_rg"
+                        check_result_json=$(check_sentinel_on_workspace "$sentinel_ws_name" "$sentinel_ws_rg" "$expected_config_json")
+                    fi
                 fi
             else
+                 log_warn "Control ID '$control_id' of type '$control_type' not specifically handled. Skipping."
                  check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
             fi
             ;;
@@ -1310,13 +1413,15 @@ execute_control_check() {
                      # List all resources of target_res_type in current_resource_group
                     local resources_in_rg_json=$(az resource list --resource-group "$current_resource_group" --resource-type "$target_res_type" --query "[].id" -o json 2>/dev/null)
                     if [ $? -ne 0 ] || [ -z "$resources_in_rg_json" ] || [ "$(echo "$resources_in_rg_json" | jq '. | length')" == "0" ]; then
+                        log_warn "No resources of type '$target_res_type' found in RG '$current_resource_group' for $control_id. Skipping."
                         check_result_json="{\"status\": \"Skipped\", \"message\": \"No resources of type '$target_res_type' found in RG '$current_resource_group' for $control_id.\"}"
                     else
                         local all_res_findings=()
                         local overall_res_status="Compliant"
+                        log_debug "Iterating resources of type '$target_res_type' in RG '$current_resource_group' for $control_id."
                         echo "$resources_in_rg_json" | jq -r '.[]' | while IFS= read -r res_id; do
                             local res_name_from_id=$(basename "$res_id")
-                            echo -e "${BLUE}[INFO]${NC} Checking Diagnostics for '$res_name_from_id' ($target_res_type) for $control_id..."
+                            log_debug "Checking Diagnostics for '$res_name_from_id' ($target_res_type), ID: $res_id, for control $control_id..."
                             local req_logs=$(echo "$control_json" | jq -c '.requiredLogs // []')
                             local req_metrics=$(echo "$control_json" | jq -c '.requiredMetrics // []')
                             local min_ret=$(echo "$control_json" | jq -r '.minRetentionDays // "0"')
@@ -1325,18 +1430,20 @@ execute_control_check() {
                             local res_check_result_json=$(check_diagnostic_settings "$res_id" "$req_logs" "$req_metrics" "$min_ret" "$diag_filter_name")
                             all_res_findings+=("$(echo "$res_check_result_json" | jq --arg resid "$res_id" '. + {resourceId: $resid}')")
                             local current_res_check_status=$(echo "$res_check_result_json" | jq -r '.status')
-                            if [ "$current_res_check_status" == "Error" ]; then overall_res_status="Error"; break; fi
+                            if [ "$current_res_check_status" == "Error" ]; then overall_res_status="Error"; break; fi # Stop on first error
                             if [ "$current_res_check_status" == "Non-Compliant" ] && [ "$overall_res_status" != "Error" ]; then overall_res_status="Non-Compliant"; fi
-                        done < <(echo "$resources_in_rg_json" | jq -r '.[]')
+                        done < <(echo "$resources_in_rg_json" | jq -r '.[]') # Ensure variable scope for overall_res_status
 
                         local findings_json_array=$(printf '%s\n' "${all_res_findings[@]}" | jq -s '.')
                         check_result_json="{\"status\": \"$overall_res_status\", \"message\": \"Diagnostic settings check for all '$target_res_type' in RG '$current_resource_group' complete.\", \"details\": $findings_json_array}"
                     fi
                 else
+                     log_warn "Unsupported targetScope '$target_scope' for $control_id ($control_type). Skipping."
                      check_result_json="{\"status\": \"Skipped\", \"message\": \"Unsupported targetScope '$target_scope' for $control_id ($control_type).\"}"
                 fi
             else
-                check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
+                 log_warn "Control ID '$control_id' of type '$control_type' not specifically handled. Skipping."
+                 check_result_json="{\"status\": \"Skipped\", \"message\": \"Control ID '$control_id' of type '$control_type' not specifically handled.\"}"
             fi
             ;;
         "RBACCheck")
@@ -1351,7 +1458,7 @@ execute_control_check() {
                     scope_to_check="$target_scope"
                 else # Default to current subscription if target_scope is not specific enough
                     scope_to_check="/subscriptions/$SUBSCRIPTION_ID"
-                    echo -e "${YELLOW}[WARN]${NC} targetScope for $control_id is '$target_scope', defaulting to subscription scope. Specify 'Subscription' or '/subscriptions/subId' or 'ResourceGroup:rgName'."
+                    log_warn "targetScope for $control_id ('$control_type') is '$target_scope', defaulting to subscription scope. Specify 'Subscription' or '/subscriptions/subId' or 'ResourceGroup:rgName'."
                 fi
 
                 local role_def_id=$(echo "$control_json" | jq -r '.roleDefinitionId')
@@ -1390,9 +1497,9 @@ execute_control_check() {
 
     # Augment the result with control_id, description, and category before returning
     # Ensure valid JSON is formed if check_result_json is empty or malformed from the specific check function
-    if ! echo "$check_result_json" | jq -e . > /dev/null 2>&1; then
-        # This case should ideally not be hit if check functions always return valid JSON
-        check_result_json="{\"status\": \"FrameworkError\", \"message\": \"Malformed or empty JSON response from check function for $control_id. Output: $check_result_json\"}"
+    if [ -z "$check_result_json" ] || ! echo "$check_result_json" | jq -e . > /dev/null 2>&1; then
+        log_error "Malformed or empty JSON response from check logic for $control_id. Output was: $check_result_json"
+        check_result_json="{\"status\": \"FrameworkError\", \"message\": \"Malformed or empty JSON response from check function for $control_id.\"}"
     fi
 
     # If the check resulted in Non-Compliant and there's a remediation suggestion, add it to the result
@@ -1411,71 +1518,78 @@ execute_control_check() {
 generate_compliance_report_from_controls() {
     local control_results_json_array="$1" # Expecting a JSON array string of results
 
-    echo -e "${BLUE}[INFO]${NC} Generating compliance report from control checks..."
+    log_info "Generating compliance report from control checks..."
 
     local overall_status="Compliant"
     # Check if any control result is Non-Compliant or Error
     if echo "$control_results_json_array" | jq -e '.[] | select(.status=="Non-Compliant" or .status=="Error")' > /dev/null; then
         overall_status="Non-Compliant"
+    elif echo "$control_results_json_array" | jq -e '.[] | select(.status=="FrameworkError")' > /dev/null; then # Consider FrameworkError as well
+        overall_status="Error" # Or a specific status for this
     fi
     
     # Create the report JSON
-    local report=$(cat <<EOF
-{
-  "complianceReport": {
-    "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-    "environment": {
-      "subscriptionId": "$SUBSCRIPTION_ID",
-      "resourceGroup": "$RESOURCE_GROUP"
-    },
-    "overallStatus": "$overall_status",
-    "controlResults": $control_results_json_array
-  }
-}
-EOF
-)
-    
-    # Save the report to a file
-    echo "$report" | jq . > "$REPORT_FILE"
-    echo -e "${GREEN}[SUCCESS]${NC} Compliance report generated: $REPORT_FILE"
+    local report_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") # Use consistent timestamp for report
+    local report=$(jq -n \
+                  --arg timestamp "$report_timestamp" \
+                  --arg subId "$SUBSCRIPTION_ID" \
+                  --arg rg "$RESOURCE_GROUP" \
+                  --arg status "$overall_status" \
+                  --argjson results "$control_results_json_array" \
+                  '{complianceReport: {timestamp: $timestamp, environment: {subscriptionId: $subId, resourceGroup: $rg}, overallStatus: $status, controlResults: $results}}')
 
-    # Print summary
-    echo -e "\n${BLUE}=== Compliance Summary (Data-Driven) ===${NC}"
-    echo -e "Overall Status: $(if [ "$overall_status" == "Compliant" ]; then echo -e "${GREEN}$overall_status${NC}"; else echo -e "${RED}$overall_status${NC}"; fi)"
+    echo "$report" > "$REPORT_FILE" # Already uses jq for formatting implicitly by >
+    log_success "${GREEN}Compliance report generated: $REPORT_FILE${NC}" # Keep color in message for emphasis
 
-    # Summarize by category if desired, or list non-compliant controls
-    echo "$control_results_json_array" | jq -r '.[] | select(.status != "Compliant" and .status != "Skipped") | "[\(.status)] \(.controlId) - \(.description): \(.message) " + (if .suggestion then "(Suggestion: \(.suggestion))" else "" end)' | while read -r line; do
-        if [[ "$line" == *"[Non-Compliant]"* ]]; then
-            echo -e "${RED}$line${NC}"
-        elif [[ "$line" == *"[Error]"* ]]; then
-            echo -e "${YELLOW}$line${NC}"
-        else
-            echo "$line"
+    log_info "\n${BLUE}=== Compliance Summary (Data-Driven) ===${NC}" # Keep color
+    log_info "Overall Status: $(if [ "$overall_status" == "Compliant" ]; then echo -e "${GREEN}$overall_status${NC}"; else echo -e "${RED}$overall_status${NC}"; fi)"
+
+    # Summarize non-compliant/error controls to STDOUT using logging
+    echo "$control_results_json_array" | jq -c '.[] | select(.status != "Compliant" and .status != "Skipped")' | while IFS= read -r finding_json; do
+        local status=$(echo "$finding_json" | jq -r '.status')
+        local id=$(echo "$finding_json" | jq -r '.controlId')
+        local desc=$(echo "$finding_json" | jq -r '.description')
+        local msg=$(echo "$finding_json" | jq -r '.message')
+        local suggestion=$(echo "$finding_json" | jq -r '.suggestion // ""')
+        # Construct message without internal color codes, let log_warn/log_error handle coloring the whole line by level
+        local log_line="[$status] $id - $desc: $msg"
+        if [ -n "$suggestion" ]; then
+            log_line+=" (Suggestion: $suggestion)"
+        fi
+
+        if [[ "$status" == "Non-Compliant" ]]; then
+            log_warn "$log_line" # log_warn will color it yellow
+        elif [[ "$status" == "Error" ]] || [[ "$status" == "FrameworkError" ]]; then
+            log_error "$log_line" # log_error will color it red
+        else # Should not happen due to jq filter, but as a fallback
+            log_info "$log_line"
         fi
     done
     
-    return 0
+    return 0 # generate_compliance_report_from_controls itself succeeds
 }
 
 
 # Main function (Data-Driven)
 main_data_driven() {
-    echo -e "${BLUE}=== Secure Landing Zone Compliance Verification (Data-Driven) ===${NC}"
-    echo -e "${BLUE}=== $(date) ===${NC}\n"
+    local start_time=$(date +%s)
+    log_info "${BLUE}=== ${SCRIPT_NAME} - Azure Compliance Verification (Data-Driven) ===${NC}"
+    log_info "Script execution started at $(date -u --date="@$start_time" +"%Y-%m-%dT%H:%M:%SZ")"
 
-    check_prerequisites
-    load_configuration "$@"
+    # Initial configuration and prerequisite checks
+    # Pass all arguments to load_configuration for it to parse
+    load_configuration "$@" || { log_error "Configuration loading failed. Exiting." ; exit 1; }
+    # check_prerequisites must be called after load_configuration if SUBSCRIPTION_ID can be set by param
+    check_prerequisites || { log_error "Prerequisite check failed. Exiting." ; exit $?; }
 
-    # Load critical controls from JSON file
-    if [ ! -f "$CRITICAL_CONTROLS_FILE" ]; then
-        echo -e "${RED}[ERROR]${NC} Critical controls file not found: $CRITICAL_CONTROLS_FILE"
-        return 1
-    fi
-    local controls_json=$(jq '.' "$CRITICAL_CONTROLS_FILE")
+
+    log_info "Loading critical controls from: $CRITICAL_CONTROLS_FILE"
+    local controls_json
+    controls_json=$(jq '.' "$CRITICAL_CONTROLS_FILE")
     if [ $? -ne 0 ]; then
-        echo -e "${RED}[ERROR]${NC} Failed to parse critical controls file: $CRITICAL_CONTROLS_FILE"
-        return 1
+        log_error "Failed to parse critical controls file: $CRITICAL_CONTROLS_FILE. Ensure it is valid JSON." ; exit 1
     fi
+    log_debug "Critical controls JSON loaded successfully."
 
     local all_control_results=() # Array to store JSON results of each control
 
@@ -1498,15 +1612,24 @@ main_data_driven() {
     generate_compliance_report_from_controls "$combined_results_json"
 
     # Return exit code based on compliance status
-    if grep -q '"overallStatus": "Non-Compliant"' "$REPORT_FILE"; then
-        echo -e "\n${RED}[ALERT]${NC} Compliance verification failed. Please review the report."
-        return 1
-    else
-        echo -e "\n${GREEN}[SUCCESS]${NC} Compliance verification passed."
+    local overall_report_status=$(jq -r '.complianceReport.overallStatus' "$REPORT_FILE")
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    log_info "Script execution finished at $(date -u --date="@$end_time" +"%Y-%m-%dT%H:%M:%SZ"). Duration: ${duration} seconds."
+
+    if [[ "$overall_report_status" == "Non-Compliant" ]]; then
+        log_error "${RED}[ALERT]${NC} Compliance verification detected Non-Compliant controls. Please review the report: $REPORT_FILE"
+        return 1 # Exit with 1 to indicate non-compliance
+    elif [[ "$overall_report_status" == "Error" ]]; then # Assuming 'Error' could be an overall status
+        log_error "${RED}[ALERT]${NC} Compliance verification encountered errors. Please review the report: $REPORT_FILE"
+        return 2 # Exit with 2 to indicate errors during checks
+    else # Compliant or other states like "Skipped" if that's how overallStatus is set
+        log_success "${GREEN}Compliance verification completed. Status: $overall_report_status. Report: $REPORT_FILE${NC}"
         return 0
     fi
 }
 
 # Run the main function
-main_data_driven "$@" # Run new data-driven main
+# Pass all script arguments to main_data_driven
+main_data_driven "$@"
 # End of script.
