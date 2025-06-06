@@ -1,0 +1,277 @@
+{
+  "generalRequirements": {
+    "defaultDenyAllInbound": true,
+    "defaultDenyAllOutbound": false,
+    "requireFlowLogging": true,
+    "prohibitedGlobalSourceRanges": [
+      "0.0.0.0/0",
+      "::/0"
+    ],
+    "allowedManagementProtocols": {
+      "ssh": "Tcp:22",
+      "rdp": "Tcp:3389"
+    },
+    "requireDdosProtection": true
+  },
+  "subnetSpecificRequirements": [
+    {
+      "subnetNamePattern": "pci-zone-.*",
+      "description": "Requirements for subnets handling Cardholder Data (PCI-DSS).",
+      "mustExist": true,
+      "allowedInbound": [
+        {
+          "name": "Allow_AppTraffic_From_Frontend",
+          "protocol": "Tcp",
+          "ports": [
+            "443",
+            "8443"
+          ],
+          "sourcePrefixes": [
+            "10.0.1.0/24"
+          ],
+          "destinationPrefixes": [
+            "self"
+          ]
+        },
+        {
+          "name": "Allow_Management_From_Jumpbox",
+          "protocol": "Tcp",
+          "ports": [
+            "22"
+          ],
+          "sourcePrefixes": [
+            "10.0.3.0/24"
+          ],
+          "destinationPrefixes": [
+            "self"
+          ]
+        }
+      ],
+      "prohibitedInboundSources": [
+        "0.0.0.0/0",
+        "::/0",
+        "Internet"
+      ],
+      "prohibitedOutboundDestinations": [
+        "0.0.0.0/0",
+        "::/0",
+        "Internet"
+      ],
+      "prohibitedPorts": [
+        "20",
+        "21",
+        "23",
+        "80"
+      ],
+      "requireNsg": true,
+      "maxUnrestrictedRules": 0,
+      "allowedOutboundTraffic": [
+        {
+          "name": "Allow_DB_Access",
+          "protocol": "Tcp",
+          "ports": [
+            "1433",
+            "3306"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "10.0.5.0/24"
+          ]
+        },
+        {
+          "name": "Allow_Patching_Internal",
+          "protocol": "Tcp",
+          "ports": [
+            "80",
+            "443"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "10.0.100.0/24"
+          ]
+        },
+        {
+          "name": "Allow_Outbound_DNS_Corp",
+          "protocol": "Udp",
+          "ports": [
+            "53"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "10.0.0.4",
+            "10.0.0.5"
+          ]
+        },
+        {
+          "name": "Allow_Outbound_HTTPS_Internet",
+          "protocol": "Tcp",
+          "ports": [
+            "443"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "Internet"
+          ]
+        },
+        {
+          "name": "Allow_Outbound_To_Regional_Storage",
+          "protocol": "Tcp",
+          "ports": [
+            "443"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "Storage.WestEurope"
+          ]
+        }
+      ]
+    },
+    {
+      "subnetNamePattern": "database-subnet-.*",
+      "description": "Requirements for subnets hosting critical databases.",
+      "mustExist": true,
+      "allowedInbound": [
+        {
+          "name": "Allow_DB_Traffic_From_PCI_And_Backend",
+          "protocol": "Tcp",
+          "ports": [
+            "1433",
+            "3306",
+            "5432"
+          ],
+          "sourcePrefixes": [
+            "10.0.2.0/24",
+            "10.0.4.0/24"
+          ],
+          "destinationPrefixes": [
+            "self"
+          ]
+        },
+        {
+          "name": "Allow_Management_From_Jumpbox",
+          "protocol": "Tcp",
+          "ports": [
+            "22"
+          ],
+          "sourcePrefixes": [
+            "10.0.3.0/24"
+          ],
+          "destinationPrefixes": [
+            "self"
+          ]
+        }
+      ],
+      "prohibitedInboundSources": [
+        "0.0.0.0/0",
+        "::/0",
+        "Internet"
+      ],
+      "prohibitedOutboundDestinations": [
+        "0.0.0.0/0",
+        "::/0",
+        "Internet"
+      ],
+      "prohibitedPorts": [
+        "80"
+      ],
+      "requireNsg": true,
+      "maxUnrestrictedRules": 0,
+      "allowedOutboundTraffic": [
+        {
+          "name": "Allow_Logging_To_SIEM",
+          "protocol": "Udp",
+          "ports": [
+            "514"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "10.0.200.0/24"
+          ]
+        }
+      ]
+    },
+    {
+      "subnetNamePattern": "frontend-subnet-.*",
+      "description": "Requirements for public-facing frontend applications.",
+      "mustExist": true,
+      "allowedInbound": [
+        {
+          "name": "Allow_HTTPS_From_Internet",
+          "protocol": "Tcp",
+          "ports": [
+            "443"
+          ],
+          "sourcePrefixes": [
+            "Internet"
+          ],
+          "destinationPrefixes": [
+            "self"
+          ]
+        },
+        {
+          "name": "Allow_Management_From_Jumpbox",
+          "protocol": "Tcp",
+          "ports": [
+            "22"
+          ],
+          "sourcePrefixes": [
+            "10.0.3.0/24"
+          ],
+          "destinationPrefixes": [
+            "self"
+          ]
+        }
+      ],
+      "prohibitedPorts": [
+        "20",
+        "21",
+        "23",
+        "80"
+      ],
+      "requireNsg": true,
+      "maxUnrestrictedRules": 1,
+      "allowedOutboundTraffic": [
+        {
+          "name": "Allow_AppTraffic_To_Backend",
+          "protocol": "Tcp",
+          "ports": [
+            "8080",
+            "8443"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "10.0.2.0/24"
+          ]
+        },
+        {
+          "name": "Allow_AppTraffic_To_PCI_Zone",
+          "protocol": "Tcp",
+          "ports": [
+            "443",
+            "8443"
+          ],
+          "sourcePrefixes": [
+            "self"
+          ],
+          "destinationPrefixes": [
+            "10.0.4.0/24"
+          ]
+        }
+      ]
+    }
+  ]
+}
