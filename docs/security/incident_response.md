@@ -35,20 +35,20 @@ sequenceDiagram
 ### Network Security Recovery
 ```bash
 # Validate network isolation
-./scripts/validate-network-isolation.sh
+./src/scripts/validate-network-isolation.sh
 
 # Restore secure configuration
-./scripts/restore-security-baseline.sh
+./src/scripts/restore-security-baseline.sh
 
 # Verify compliance
-./scripts/verify-compliance.sh
+./src/scripts/verify-compliance.sh
 ```
 
 ### Encryption Recovery
 ```bash
 # Rotate compromised keys
-./scripts/rotate-hsm-keys.sh
+./src/scripts/rotate-hsm-keys.sh
 
 # Validate key rotation
-./scripts/validate-key-rotation.sh
+./src/scripts/validate-key-rotation.sh
 ```
